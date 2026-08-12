@@ -1,0 +1,31 @@
+# 构建产物
+build/
+build_cross/
+
+# 第三方库/编译器(体积大, 不入库)
+3rdparty/
+debs/
+
+# RKNN 模型文件(单文件 11-21MB, 不入库; 需要时从板子/本地拷贝)
+models/*.rknn
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 运行时生成
+detect.log
+stats.txt
+fp_frames/
+frame.jpg
+frame.jpg.tmp.jpg
+detectui.ini
+zone.txt
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 备份文件
+*.bak
+*~
