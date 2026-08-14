@@ -67,7 +67,7 @@ private:
     QString full_text;
 };
 
-// RK3588 电子围栏 - 工业暗黑风界面 (JEEFence)
+// RK3588 电子围栏系统界面 (JEEFence)
 // 布局按 ui/电子围栏系统界面设计.md 参考图, 逻辑复用现有 Detect 日志协议
 class IndustrialUI : public QMainWindow {
     Q_OBJECT

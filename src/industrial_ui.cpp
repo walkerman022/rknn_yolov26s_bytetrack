@@ -1,4 +1,4 @@
-// industrial_ui.cpp - RK3588 电子围栏 工业暗黑风界面 (JEEFence)
+// industrial_ui.cpp - RK3588 电子围栏系统界面 (JEEFence)
 // 布局/配色按 ui/电子围栏系统界面设计.md 参考图; 逻辑复用现有 Detect 日志协议
 // 板上编译: cd build && make JEEFence
 #include "industrial_ui.h"
@@ -165,7 +165,7 @@ void RenderView::paintEvent(QPaintEvent* ev) {
     }
 }
 
-// ---------------- 工业风样式 (暗黑主题) ----------------
+// ---------------- 深色主题样式 ----------------
 static const char* const STYLE_SHEET = R"(
 QMainWindow, QDialog { background-color: #2B2B2B; }
 QWidget { color: #E0E0E0; }
