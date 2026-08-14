@@ -57,9 +57,11 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#ifndef _WIN32
 #include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 // QProcess 子类: exec 前把子进程放入独立进程组, 停止时可用 killpg 一次杀掉 sudo + Detect
 class IndustrialProcess : public QProcess {
@@ -67,7 +69,9 @@ public:
     explicit IndustrialProcess(QObject* parent = nullptr) : QProcess(parent) {}
 protected:
     void setupChildProcess() override {
+#ifndef _WIN32
         ::setpgid(0, 0);
+#endif
     }
 };
 
@@ -253,6 +257,7 @@ void IndustrialUI::buildUi() {
     root->addWidget(toolbar_widget);
     buildMainArea();
     root->addLayout(main_layout, 1);
+    buildStatusBar();
     statusBar()->setSizeGripEnabled(false);
 }
 
@@ -515,7 +520,11 @@ QStringList IndustrialUI::drawCmd() const {
 void IndustrialUI::start() {
     stop();
     // 勾选"使用sudo"但界面不是 root 时: Detect 会以 root 运行, 普通用户界面杀不掉它 → 自动取消并提示
-    if (var["sudo"] == "true" && ::geteuid() != 0) {
+    bool not_root = false;
+#ifndef _WIN32
+    not_root = (::geteuid() != 0);
+#endif
+    if (var["sudo"] == "true" && not_root) {
         var["sudo"] = "false";
         log(QString::fromUtf8("[警告] 勾选了「使用sudo」但界面非 root 启动: Detect 会以 root 运行, 停止按钮将失效。"
                               "已自动取消勾选, 以普通用户运行 Detect(NPU 无需 root)。如需 root 请用 sudo ./DetectUI2 启动界面。"));
@@ -547,10 +556,15 @@ void IndustrialUI::stop() {
     if (proc && proc->state() != QProcess::NotRunning) {
         qint64 pid = proc->processId();
         if (pid > 0) {
+#ifndef _WIN32
             if (::kill(-(pid_t)pid, SIGTERM) != 0)
                 log(QString::fromUtf8("[停止] 停止信号发送失败(errno=%1): Detect 可能以 root 运行而界面是普通用户, "
                                       "请用 sudo ./DetectUI2 启动界面或取消勾选「使用sudo」")
                         .arg(errno));
+#else
+            log(QString::fromUtf8("[停止] Windows 预览版: 请求终止子进程 PID %1").arg(pid));
+            proc->terminate();
+#endif
         }
         // 不阻塞 UI: 由 finished 信号收尾; 3 秒仍未退出则强杀
         QProcess* p = proc;
