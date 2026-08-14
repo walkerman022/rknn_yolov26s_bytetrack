@@ -161,6 +161,15 @@ QToolButton {
     background: transparent; border: none; border-radius: 4px;
     padding: 6px 10px; font-size: 13px; color: #CCCCCC;
 }
+/* 顶部功能按钮: 文字橙色 + 一圈轮廓边框便于分辨点击区域 */
+#topBar QToolButton {
+    color: #FF9900;
+    border: 1px solid #5A5A5A;
+    border-radius: 6px;
+    padding: 4px 12px;
+}
+#topBar QToolButton:hover { background: #3A3A3A; border-color: #FF9900; }
+#topBar QToolButton:pressed { background: #454545; }
 QToolButton:hover { background: #3A3A3A; color: #FFFFFF; }
 QToolButton:pressed { background: #454545; }
 QToolButton:checked { background: #00B027; color: #FFFFFF; }
@@ -302,9 +311,15 @@ void IndustrialUI::buildTopBar() {
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         b->setText(QString::fromUtf8(btns[i].text));
         b->setIcon(QIcon());  // 单色线条图标可后续替换, 暂用文字
-        b->setFixedHeight(58);
-        if (i == 6) { b->setObjectName("startBtn"); b->setStyleSheet(b->styleSheet() + QString::fromUtf8("background:#00B027; color:#FFFFFF; font-weight:bold;")); }
-        if (i == 7) { b->setObjectName("stopBtn");  b->setStyleSheet(b->styleSheet() + QString::fromUtf8("background:#D32F2F; color:#FFFFFF; font-weight:bold;")); }
+        if (i < 6) {
+            b->setFixedSize(72, 52);   // 功能按钮
+        } else {
+            b->setFixedSize(52, 40);   // 开始/停止: 调小
+            b->setStyleSheet(QString::fromUtf8(
+                "background:#00B027; color:#FFFFFF; font-weight:bold; border-radius:6px;"
+                "font-size:13px; padding:0 4px;"));
+        }
+        if (i == 7) { b->setObjectName("stopBtn"); b->setStyleSheet(QString::fromUtf8("background:#D32F2F; color:#FFFFFF; font-weight:bold; border-radius:6px; font-size:13px; padding:0 4px;")); }
         lay->addWidget(b);
         // 信号连接
         switch (i) {
