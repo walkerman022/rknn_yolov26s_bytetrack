@@ -141,6 +141,14 @@ private:
     void buildStatusBar();
     void updateDiskInfo();
 
+    // ---- 无边框窗口拖动/缩放 ----
+    void mousePressEvent(QMouseEvent* ev) override;
+    void mouseMoveEvent(QMouseEvent* ev) override;
+    void mouseReleaseEvent(QMouseEvent* ev) override;
+    QPoint drag_offset;                 // 拖动窗口时的鼠标偏移
+    bool resizing = false;              // 正在边缘缩放
+    int resize_edge = 0;                // 缩放边: 1右 2下 3右下
+
     // ---- 工具 ----
     QStringList listVideos() const;
     void setDefaultVideo();
@@ -189,7 +197,6 @@ private:
     void openCommDlg();
     void openQuery();
     void openCanvasDlg();
-    void openUserDlg();
 };
 
 #endif // INDUSTRIAL_UI_H

@@ -118,13 +118,14 @@ target_link_libraries(Detect ${CMAKE_THREAD_LIBS_INIT})
 find_package(Qt5 COMPONENTS Widgets QUIET)
 if(Qt5Widgets_FOUND)
   set(CMAKE_AUTOMOC ON)
+  set(CMAKE_AUTORCC ON)
   add_executable(DetectUI src/detect_ui.cpp src/detect_ui.h)
   target_link_libraries(DetectUI Qt5::Widgets ${CMAKE_THREAD_LIBS_INIT})
   message(STATUS "DetectUI enabled (Qt5 found)")
 
   # DetectUI2: 工业暗黑风界面 (ui/电子围栏系统界面设计.md), 独立程序
   # 单独编译: cd build && make DetectUI2
-  add_executable(DetectUI2 src/industrial_ui.cpp src/industrial_ui.h)
+  add_executable(DetectUI2 src/industrial_ui.cpp src/industrial_ui.h src/industrial_ui.qrc)
   target_link_libraries(DetectUI2 Qt5::Widgets ${CMAKE_THREAD_LIBS_INIT})
 else()
   message(STATUS "Qt5 not found - DetectUI skipped (sudo apt install -y qtbase5-dev)")

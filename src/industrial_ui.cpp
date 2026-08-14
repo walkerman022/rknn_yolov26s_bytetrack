@@ -203,10 +203,8 @@ IndustrialUI::IndustrialUI(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(QString::fromUtf8("JEE 电子围栏系统"));
     resize(1600, 900);
     setStyleSheet(QString::fromUtf8(STYLE_SHEET));
-    setWindowFlags(Qt::Window |
-                   Qt::WindowMinimizeButtonHint |
-                   Qt::WindowMaximizeButtonHint |
-                   Qt::WindowCloseButtonHint);
+    // 无边框: 去掉系统标题栏(最小化/最大化/关闭由自建顶部横条右侧按钮提供)
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
 
     var["mode"] = "fp+miss";
     var["src"] = "run";
@@ -271,9 +269,16 @@ void IndustrialUI::buildTopBar() {
     lay->setSpacing(6);
 
     // 左侧 Logo + 名称
-    QLabel* logo = new QLabel(QString::fromUtf8("JEE"));
-    logo->setStyleSheet(QString::fromUtf8("background:#FF9900; color:#000000; font-weight:bold; "
-                                          "font-size:20px; padding:4px 12px; border-radius:4px;"));
+    QLabel* logo = new QLabel();
+    QPixmap logo_pm(":/JEE.png");
+    if (!logo_pm.isNull()) {
+        logo_pm = logo_pm.scaledToHeight(44, Qt::SmoothTransformation);
+        logo->setPixmap(logo_pm);
+    } else {
+        logo->setText(QString::fromUtf8("JEE"));
+        logo->setStyleSheet(QString::fromUtf8("background:#FF9900; color:#000000; font-weight:bold; "
+                                              "font-size:20px; padding:4px 12px; border-radius:4px;"));
+    }
     lay->addWidget(logo);
     QLabel* name = new QLabel(QString::fromUtf8("安徽巨一科技股份有限公司"));
     name->setObjectName("logoText");
@@ -285,16 +290,16 @@ void IndustrialUI::buildTopBar() {
     TopBtn btns[] = {
         {u8"打开项目", "📁"}, {u8"系统参数", "⚙"}, {u8"相机设备", "📷"},
         {u8"外部通信", "🔌"}, {u8"数据查询", "🔍"}, {u8"画布设置", "🎨"},
-        {u8"用户管理", "👤"}, {u8"开始", "▶"}, {u8"停止", "■"},
+        {u8"开始", "▶"}, {u8"停止", "■"},
     };
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < 8; ++i) {
         QToolButton* b = new QToolButton(toolbar_widget);
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         b->setText(QString::fromUtf8(btns[i].text));
         b->setIcon(QIcon());  // 单色线条图标可后续替换, 暂用文字
         b->setFixedHeight(58);
-        if (i == 7) { b->setObjectName("startBtn"); b->setStyleSheet(b->styleSheet() + QString::fromUtf8("background:#00B027; color:#FFFFFF; font-weight:bold;")); }
-        if (i == 8) { b->setObjectName("stopBtn");  b->setStyleSheet(b->styleSheet() + QString::fromUtf8("background:#D32F2F; color:#FFFFFF; font-weight:bold;")); }
+        if (i == 6) { b->setObjectName("startBtn"); b->setStyleSheet(b->styleSheet() + QString::fromUtf8("background:#00B027; color:#FFFFFF; font-weight:bold;")); }
+        if (i == 7) { b->setObjectName("stopBtn");  b->setStyleSheet(b->styleSheet() + QString::fromUtf8("background:#D32F2F; color:#FFFFFF; font-weight:bold;")); }
         lay->addWidget(b);
         // 信号连接
         switch (i) {
@@ -304,9 +309,8 @@ void IndustrialUI::buildTopBar() {
         case 3: connect(b, &QToolButton::clicked, this, &IndustrialUI::openCommDlg); break;
         case 4: connect(b, &QToolButton::clicked, this, &IndustrialUI::openQuery); break;
         case 5: connect(b, &QToolButton::clicked, this, &IndustrialUI::openCanvasDlg); break;
-        case 6: connect(b, &QToolButton::clicked, this, &IndustrialUI::openUserDlg); break;
-        case 7: btn_start = b; connect(b, &QToolButton::clicked, this, &IndustrialUI::start); break;
-        case 8: btn_stop = b; btn_stop->setEnabled(false); connect(b, &QToolButton::clicked, this, &IndustrialUI::stop); break;
+        case 6: btn_start = b; connect(b, &QToolButton::clicked, this, &IndustrialUI::start); break;
+        case 7: btn_stop = b; btn_stop->setEnabled(false); connect(b, &QToolButton::clicked, this, &IndustrialUI::stop); break;
         }
     }
     lay->addStretch(1);
@@ -420,6 +424,75 @@ void IndustrialUI::updateDiskInfo() {
     QStorageInfo si("/");
     double gb = si.bytesAvailable() / (1024.0 * 1024.0 * 1024.0);
     lbl_disk->setText(QString::fromUtf8("剩余存储: %1 GB").arg(gb, 0, 'f', 1));
+}
+
+// ---- 无边框窗口拖动/缩放 (无系统标题栏, 需手动实现: 顶部横条拖动, 边缘缩放) ----
+void IndustrialUI::mousePressEvent(QMouseEvent* ev) {
+    if (ev->button() == Qt::LeftButton) {
+        // 边缘缩放: 右下角/右边缘/下边缘 8px 内按下
+        const int E = 8;
+        QPoint g = ev->globalPos(), tl = frameGeometry().topLeft();
+        QSize sz = frameGeometry().size();
+        int edge = 0;
+        if (g.x() >= tl.x() + sz.width() - E) edge |= 1;   // 右
+        if (g.y() >= tl.y() + sz.height() - E) edge |= 2;  // 下
+        if (edge) {
+            resizing = true;
+            resize_edge = edge;
+            drag_offset = g - QPoint(sz.width(), sz.height());   // 记录缩放基线
+            ev->accept();
+            return;
+        }
+        // 顶部横条拖动
+        if (toolbar_widget && toolbar_widget->geometry().contains(ev->pos())) {
+            drag_offset = ev->globalPos() - frameGeometry().topLeft();
+            ev->accept();
+            return;
+        }
+    }
+    QMainWindow::mousePressEvent(ev);
+}
+
+void IndustrialUI::mouseMoveEvent(QMouseEvent* ev) {
+    if (resizing) {
+        QPoint g = ev->globalPos();
+        QRect f = frameGeometry();
+        if (resize_edge & 1) f.setRight(g.x());        // 右边缘
+        if (resize_edge & 2) f.setBottom(g.y());       // 下边缘
+        // 最小尺寸限制
+        if (f.width() < 900) f.setWidth(900);
+        if (f.height() < 600) f.setHeight(600);
+        setGeometry(f);
+        ev->accept();
+        return;
+    }
+    if (ev->buttons() & Qt::LeftButton && !drag_offset.isNull()) {
+        move(ev->globalPos() - drag_offset);
+        ev->accept();
+        return;
+    }
+    // 边缘悬停改光标
+    if (!(ev->buttons() & Qt::LeftButton)) {
+        QPoint g = ev->globalPos(), tl = frameGeometry().topLeft();
+        QSize sz = frameGeometry().size();
+        const int E = 8;
+        bool r = g.x() >= tl.x() + sz.width() - E;
+        bool b = g.y() >= tl.y() + sz.height() - E;
+        setCursor(r && b ? Qt::SizeFDiagCursor :
+                 r      ? Qt::SizeHorCursor :
+                 b      ? Qt::SizeVerCursor : Qt::ArrowCursor);
+    }
+    QMainWindow::mouseMoveEvent(ev);
+}
+
+void IndustrialUI::mouseReleaseEvent(QMouseEvent* ev) {
+    if (ev->button() == Qt::LeftButton) {
+        resizing = false;
+        resize_edge = 0;
+        drag_offset = QPoint();
+        setCursor(Qt::ArrowCursor);
+    }
+    QMainWindow::mouseReleaseEvent(ev);
 }
 
 // ---------------- 工具 ----------------
@@ -1253,11 +1326,6 @@ void IndustrialUI::openQuery() {
 void IndustrialUI::openCanvasDlg() {
     QMessageBox::information(this, QString::fromUtf8("画布设置"),
         QString::fromUtf8("围栏名称: %1\n画布背景: 棋盘格").arg(var["zone_name"]));
-}
-
-void IndustrialUI::openUserDlg() {
-    QMessageBox::information(this, QString::fromUtf8("用户管理"),
-        QString::fromUtf8("当前用户: %1 (单用户系统, 无管理功能)").arg(QString::fromUtf8(qgetenv("USER"))));
 }
 
 // ---------------- 设置持久化 ----------------
