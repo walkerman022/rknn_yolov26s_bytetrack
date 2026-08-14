@@ -57,7 +57,12 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#ifndef _WIN32
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <windowsx.h>
+#include <QAbstractNativeEventFilter>
+#else
 #include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -426,72 +431,51 @@ void IndustrialUI::updateDiskInfo() {
     lbl_disk->setText(QString::fromUtf8("剩余存储: %1 GB").arg(gb, 0, 'f', 1));
 }
 
-// ---- 无边框窗口拖动/缩放 (无系统标题栏, 需手动实现: 顶部横条拖动, 边缘缩放) ----
+// ---- 无边框窗口拖动/缩放 (无系统标题栏) ----
+// 缩放用 Windows 原生 WM_NCHITTEST: 系统自己处理边缘检测/光标/拖动, 不受子控件遮挡影响
+bool IndustrialUI::nativeEvent(const QByteArray& eventType, void* message, long* result) {
+#ifdef _WIN32
+    MSG* msg = static_cast<MSG*>(message);
+    if (msg->message == WM_NCHITTEST) {
+        const int BORDER = 8;
+        RECT rc;
+        GetWindowRect(msg->hwnd, &rc);
+        int x = GET_X_LPARAM(msg->lParam), y = GET_Y_LPARAM(msg->lParam);
+        bool l = x < rc.left + BORDER, r = x > rc.right - BORDER;
+        bool t = y < rc.top + BORDER, b = y > rc.bottom - BORDER;
+        *result = l && t ? HTTOPLEFT : r && t ? HTTOPRIGHT :
+                  l && b ? HTBOTTOMLEFT : r && b ? HTBOTTOMRIGHT :
+                  l ? HTLEFT : r ? HTRIGHT : t ? HTTOP : b ? HTBOTTOM : 0;
+        if (*result) return true;   // 边缘: 交给系统缩放
+    }
+#else
+    Q_UNUSED(eventType); Q_UNUSED(message); Q_UNUSED(result);
+#endif
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+// 顶部横条拖动 (鼠标事件只在无子控件区域/空白处能到达主窗口, 足够拖动)
 void IndustrialUI::mousePressEvent(QMouseEvent* ev) {
-    if (ev->button() == Qt::LeftButton) {
-        // 边缘缩放: 右下角/右边缘/下边缘 8px 内按下
-        const int E = 8;
-        QPoint g = ev->globalPos(), tl = frameGeometry().topLeft();
-        QSize sz = frameGeometry().size();
-        int edge = 0;
-        if (g.x() >= tl.x() + sz.width() - E) edge |= 1;   // 右
-        if (g.y() >= tl.y() + sz.height() - E) edge |= 2;  // 下
-        if (edge) {
-            resizing = true;
-            resize_edge = edge;
-            drag_offset = g - QPoint(sz.width(), sz.height());   // 记录缩放基线
-            ev->accept();
-            return;
-        }
-        // 顶部横条拖动
-        if (toolbar_widget && toolbar_widget->geometry().contains(ev->pos())) {
-            drag_offset = ev->globalPos() - frameGeometry().topLeft();
-            ev->accept();
-            return;
-        }
+    if (ev->button() == Qt::LeftButton &&
+        toolbar_widget && toolbar_widget->geometry().contains(ev->pos())) {
+        drag_offset = ev->globalPos() - frameGeometry().topLeft();
+        ev->accept();
+        return;
     }
     QMainWindow::mousePressEvent(ev);
 }
 
 void IndustrialUI::mouseMoveEvent(QMouseEvent* ev) {
-    if (resizing) {
-        QPoint g = ev->globalPos();
-        QRect f = frameGeometry();
-        if (resize_edge & 1) f.setRight(g.x());        // 右边缘
-        if (resize_edge & 2) f.setBottom(g.y());       // 下边缘
-        // 最小尺寸限制
-        if (f.width() < 900) f.setWidth(900);
-        if (f.height() < 600) f.setHeight(600);
-        setGeometry(f);
-        ev->accept();
-        return;
-    }
     if (ev->buttons() & Qt::LeftButton && !drag_offset.isNull()) {
         move(ev->globalPos() - drag_offset);
         ev->accept();
         return;
     }
-    // 边缘悬停改光标
-    if (!(ev->buttons() & Qt::LeftButton)) {
-        QPoint g = ev->globalPos(), tl = frameGeometry().topLeft();
-        QSize sz = frameGeometry().size();
-        const int E = 8;
-        bool r = g.x() >= tl.x() + sz.width() - E;
-        bool b = g.y() >= tl.y() + sz.height() - E;
-        setCursor(r && b ? Qt::SizeFDiagCursor :
-                 r      ? Qt::SizeHorCursor :
-                 b      ? Qt::SizeVerCursor : Qt::ArrowCursor);
-    }
     QMainWindow::mouseMoveEvent(ev);
 }
 
 void IndustrialUI::mouseReleaseEvent(QMouseEvent* ev) {
-    if (ev->button() == Qt::LeftButton) {
-        resizing = false;
-        resize_edge = 0;
-        drag_offset = QPoint();
-        setCursor(Qt::ArrowCursor);
-    }
+    if (ev->button() == Qt::LeftButton) drag_offset = QPoint();
     QMainWindow::mouseReleaseEvent(ev);
 }
 

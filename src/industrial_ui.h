@@ -145,9 +145,8 @@ private:
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
     void mouseReleaseEvent(QMouseEvent* ev) override;
+    bool nativeEvent(const QByteArray& eventType, void* message, long* result) override;
     QPoint drag_offset;                 // 拖动窗口时的鼠标偏移
-    bool resizing = false;              // 正在边缘缩放
-    int resize_edge = 0;                // 缩放边: 1右 2下 3右下
 
     // ---- 工具 ----
     QStringList listVideos() const;
