@@ -1,5 +1,11 @@
 <RCC>
     <qresource prefix="/">
         <file>JEE.png</file>
+        <file>icons_png/settings.png</file>
+        <file>icons_png/camera.png</file>
+        <file>icons_png/data.png</file>
+        <file>icons_png/fence.png</file>
+        <file>icons_png/run.png</file>
+        <file>icons_png/stop.png</file>
     </qresource>
 </RCC>

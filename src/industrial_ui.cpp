@@ -1,6 +1,6 @@
-// industrial_ui.cpp - RK3588 电子围栏 工业暗黑风界面 (DetectUI2)
+// industrial_ui.cpp - RK3588 电子围栏 工业暗黑风界面 (JEEFence)
 // 布局/配色按 ui/电子围栏系统界面设计.md 参考图; 逻辑复用现有 Detect 日志协议
-// 板上编译: cd build && make DetectUI2
+// 板上编译: cd build && make JEEFence
 #include "industrial_ui.h"
 
 #include <QApplication>
@@ -22,6 +22,7 @@
 #include <QFont>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
@@ -38,6 +39,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -98,6 +100,16 @@ static const QRegularExpression reZoneExit(R"(\[Zone\] Person id=(\d+) EXITED)")
 void ClickableLabel2::mousePressEvent(QMouseEvent* ev) {
     emit clicked();
     QLabel::mousePressEvent(ev);
+}
+
+// ---------------- ElidedLabel (宽度不足时省略号代替裁剪) ----------------
+void ElidedLabel::paintEvent(QPaintEvent* ev) {
+    QPainter p(this);
+    QString elided = fontMetrics().elidedText(full_text, Qt::ElideRight, width());
+    QStyleOption opt;
+    opt.initFrom(this);
+    p.setPen(palette().color(QPalette::WindowText));
+    p.drawText(rect(), alignment(), elided);
 }
 
 // ---------------- RenderView (渲染区: 棋盘格 + 视频帧 + 围栏叠加) ----------------
@@ -162,18 +174,28 @@ QToolButton {
     padding: 6px 10px; font-size: 13px; color: #CCCCCC;
 }
 /* 顶部功能按钮: 文字橙色 + 一圈轮廓边框便于分辨点击区域 */
-#topBar QToolButton {
+#topBar QToolButton, #sideBar QToolButton {
     color: #FF9900;
     border: 1px solid #5A5A5A;
     border-radius: 6px;
-    padding: 4px 12px;
+    padding: 6px 8px;   /* 内边距收窄, 1280px 窗口下容纳完整公司名称 */
 }
-#topBar QToolButton:hover { background: #3A3A3A; border-color: #FF9900; }
-#topBar QToolButton:pressed { background: #454545; }
+#topBar QToolButton:hover, #sideBar QToolButton:hover { background: #3A3A3A; border-color: #FF9900; }
+#topBar QToolButton:pressed, #sideBar QToolButton:pressed { background: #454545; }
+#topBar QToolButton:disabled, #sideBar QToolButton:disabled { color: #FF9900; border-color: #5A5A5A; }
+/* 窗口控制按钮(最小/最大/关闭): 无轮廓 */
+#topBar QToolButton#winCtl {
+    color: #CCCCCC;
+    border: none;
+    font-size: 18px;
+    padding: 2px 8px;
+}
+#topBar QToolButton#winCtl:hover { background: #3A3A3A; color: #FFFFFF; }
 QToolButton:hover { background: #3A3A3A; color: #FFFFFF; }
 QToolButton:pressed { background: #454545; }
 QToolButton:checked { background: #00B027; color: #FFFFFF; }
 #topBar { background-color: #333333; border-bottom: 1px solid #1F1F1F; }
+#sideBar { background-color: #303030; border-right: 1px solid #1F1F1F; }
 #logoText { color: #FF9900; font-size: 15px; font-weight: bold; }
 #renderView { background-color: #1A1A1A; border: 1px solid #3A3A3A; }
 #okCard {
@@ -186,25 +208,33 @@ QToolButton:checked { background: #00B027; color: #FFFFFF; }
 #statusBar QLabel { color: #CCCCCC; padding: 0 8px; }
 #statusBar #statusDot { color: #00FF00; font-weight: bold; }
 #statusBar #statusDot[bad="true"] { color: #FFFF00; }
-QTableWidget { background-color: #FFFFFF; color: #000000; gridline-color: #CCCCCC;
+QTableWidget { background-color: #2B2B2B; color: #E0E0E0; gridline-color: #3A3A3A;
                font-size: 13px; }
-QHeaderView::section { background-color: #DDDDDD; color: #000000;
-                       padding: 4px; border: 1px solid #BBBBBB; font-weight: bold; }
-QTableWidget::item { padding: 2px 6px; }
-QTableWidget::item:selected { background-color: #C8E6C9; color: #000000; }
+QHeaderView::section { background-color: #333333; color: #FF9900;
+                       padding: 4px; border: 1px solid #3A3A3A; font-weight: bold; }
+QTableWidget::item { padding: 2px 6px; color: #E0E0E0; }
+QTableWidget::item:selected { background-color: #454545; color: #FFFFFF; }
 QPlainTextEdit { background-color: #1A1A1A; color: #00CC00;
                  font-family: "DejaVu Sans Mono"; font-size: 12px; }
 QLineEdit, QComboBox { background-color: #FFFFFF; color: #000000; }
+/* 对话框内容: 文字橙色调(数据查询/系统参数等对话框, 默认灰看不清) */
+QDialog QLabel { color: #FF9900; }
+QDialog QGroupBox { color: #FF9900; }
+QDialog QGroupBox::title { color: #FF9900; }
+QDialog QTabWidget::pane { border: 1px solid #3A3A3A; }
+QDialog QTabBar::tab {
+    background: #333333; color: #FF9900; padding: 6px 18px;
+    border: 1px solid #3A3A3A; border-bottom: none;
+}
+QDialog QTabBar::tab:selected { background: #2B2B2B; }
+QDialog QTabBar::tab:hover { background: #3A3A3A; }
+QDialog QScrollArea { background: #2B2B2B; }
 QPushButton { background-color: #3A3A3A; color: #E0E0E0; border: 1px solid #555555;
               border-radius: 4px; padding: 5px 14px; }
 QPushButton:hover { background-color: #4A4A4A; }
 QPushButton:disabled { background-color: #2E2E2E; color: #777777; }
-QPushButton#startBtn { background-color: #00B027; color: #FFFFFF; border: none; font-weight: bold; }
-QPushButton#stopBtn  { background-color: #D32F2F; color: #FFFFFF; border: none; font-weight: bold; }
-QToolButton#startBtn { background-color: #00B027; color: #FFFFFF; border: none; font-weight: bold; }
-QToolButton#stopBtn  { background-color: #D32F2F; color: #FFFFFF; border: none; font-weight: bold; }
 QGroupBox { border: 1px solid #3A3A3A; border-radius: 4px; margin-top: 8px;
-            padding-top: 8px; color: #CCCCCC; }
+            padding-top: 8px; color: #CCCCCC; background: transparent; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
 QScrollArea { background: transparent; }
 QScrollBar:vertical { background: #2B2B2B; width: 10px; }
@@ -215,7 +245,12 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 // ---------------- IndustrialUI ----------------
 IndustrialUI::IndustrialUI(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(QString::fromUtf8("JEE 电子围栏系统"));
-    resize(1600, 900);
+    // 初始大小适中(避免跨屏), 启动时居中到主屏
+    resize(1360, 800);
+    // 最小窗口: 1080p 分辨率下适中 (1280x720 即可完整容纳全部功能)
+    setMinimumSize(1280, 720);
+    QRect scr = QGuiApplication::primaryScreen()->availableGeometry();
+    move(scr.center() - rect().center());
     setStyleSheet(QString::fromUtf8(STYLE_SHEET));
     // 无边框: 去掉系统标题栏(最小化/最大化/关闭由自建顶部横条右侧按钮提供)
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -267,14 +302,21 @@ void IndustrialUI::buildUi() {
     root->setSpacing(0);
     buildTopBar();
     root->addWidget(toolbar_widget);
+    // 中部: 左侧竖排功能按钮 + 主内容区
+    QHBoxLayout* mid = new QHBoxLayout();
+    mid->setContentsMargins(0, 0, 0, 0);
+    mid->setSpacing(0);
+    buildSideBar();
+    mid->addWidget(sidebar_widget);
     buildMainArea();
-    root->addLayout(main_layout, 1);
+    mid->addLayout(main_layout, 1);
+    root->addLayout(mid, 1);
     buildStatusBar();
     statusBar()->setSizeGripEnabled(false);
 }
 
 void IndustrialUI::buildTopBar() {
-    // 顶部工具栏: 左 Logo, 中按钮组, 右窗口控制
+    // 顶部工具栏: 左 Logo+公司名称, 右窗口控制
     toolbar_widget = new QWidget();
     toolbar_widget->setObjectName("topBar");
     toolbar_widget->setFixedHeight(64);
@@ -286,7 +328,7 @@ void IndustrialUI::buildTopBar() {
     QLabel* logo = new QLabel();
     QPixmap logo_pm(":/JEE.png");
     if (!logo_pm.isNull()) {
-        logo_pm = logo_pm.scaledToHeight(44, Qt::SmoothTransformation);
+        logo_pm = logo_pm.scaledToHeight(40, Qt::SmoothTransformation);
         logo->setPixmap(logo_pm);
     } else {
         logo->setText(QString::fromUtf8("JEE"));
@@ -294,32 +336,83 @@ void IndustrialUI::buildTopBar() {
                                               "font-size:20px; padding:4px 12px; border-radius:4px;"));
     }
     lay->addWidget(logo);
-    QLabel* name = new QLabel(QString::fromUtf8("安徽巨一科技股份有限公司"));
+    // 公司名称: 窗口缩小时显示省略号(...), 不遮挡截断
+    ElidedLabel* name = new ElidedLabel(QString::fromUtf8("安徽巨一科技股份有限公司"));
     name->setObjectName("logoText");
-    lay->addWidget(name);
-    lay->addSpacing(24);
+    name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    name->setMinimumWidth(0);
+    lay->addWidget(name, 1);   // stretch=1: 随窗口缩放, 超宽省略
+    lay->addStretch(1);
 
-    // 中间按钮组 (图标在上文字在下, QToolButton)
-    struct TopBtn { const char* text; const char* icon; };
-    TopBtn btns[] = {
-        {u8"打开项目", "📁"}, {u8"系统参数", "⚙"}, {u8"相机设备", "📷"},
-        {u8"外部通信", "🔌"}, {u8"数据查询", "🔍"}, {u8"画布设置", "🎨"},
-        {u8"开始", "▶"}, {u8"停止", "■"},
+    // 右侧窗口控制 (最小化/最大化/关闭) - 独立容器, 固定右侧不被布局挤压
+    QWidget* wctl = new QWidget(toolbar_widget);
+    QHBoxLayout* wctl_lay = new QHBoxLayout(wctl);
+    wctl_lay->setContentsMargins(0, 0, 0, 0);
+    wctl_lay->setSpacing(2);
+    QToolButton* b_min = new QToolButton(wctl);
+    b_min->setObjectName("winCtl");
+    b_min->setToolButtonStyle(Qt::ToolButtonTextOnly);   // 默认 IconOnly 不显示文字
+    b_min->setText(QString::fromUtf8("—"));
+    b_min->setFixedSize(36, 36);
+    b_min->setToolTip(QString::fromUtf8("最小化"));
+    connect(b_min, &QToolButton::clicked, this, &QWidget::showMinimized);
+    QToolButton* b_max = new QToolButton(wctl);
+    b_max->setObjectName("winCtl");
+    b_max->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    b_max->setText(QString::fromUtf8("□"));
+    b_max->setFixedSize(36, 36);
+    b_max->setToolTip(QString::fromUtf8("最大化"));
+    connect(b_max, &QToolButton::clicked, this, [this]() {
+        isMaximized() ? showNormal() : showMaximized();
+    });
+    QToolButton* b_close = new QToolButton(wctl);
+    b_close->setObjectName("winCtl");
+    b_close->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    b_close->setText(QString::fromUtf8("✕"));
+    b_close->setFixedSize(36, 36);
+    b_close->setToolTip(QString::fromUtf8("关闭"));
+    connect(b_close, &QToolButton::clicked, this, &QWidget::close);
+    wctl_lay->addWidget(b_min);
+    wctl_lay->addWidget(b_max);
+    wctl_lay->addWidget(b_close);
+    lay->addWidget(wctl);
+}
+
+void IndustrialUI::buildSideBar() {
+    // 左侧竖排功能按钮栏: 8 个按钮从上到下
+    sidebar_widget = new QWidget();
+    sidebar_widget->setObjectName("sideBar");
+    sidebar_widget->setFixedWidth(96);
+    QVBoxLayout* lay = new QVBoxLayout(sidebar_widget);
+    lay->setContentsMargins(8, 10, 8, 10);
+    lay->setSpacing(8);
+
+    // PNG 图标资源 (由 SVG 预转, 已嵌入 qrc; 板子无需 Qt5Svg)
+    static const char* const svg_icons[] = {
+        ":/icons_png/settings.png", ":/icons_png/camera.png", ":/icons_png/data.png",
+        ":/icons_png/settings.png", ":/icons_png/data.png", ":/icons_png/fence.png",
+        ":/icons_png/run.png", ":/icons_png/stop.png",
+    };
+    const char* texts[] = {
+        u8"打开视频", u8"系统参数", u8"相机设备", u8"外部通信",
+        u8"数据查询", u8"围栏设置", u8"开始", u8"停止",
     };
     for (int i = 0; i < 8; ++i) {
-        QToolButton* b = new QToolButton(toolbar_widget);
+        QToolButton* b = new QToolButton(sidebar_widget);
         b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        b->setText(QString::fromUtf8(btns[i].text));
-        b->setIcon(QIcon());  // 单色线条图标可后续替换, 暂用文字
-        if (i < 6) {
-            b->setFixedSize(72, 52);   // 功能按钮
-        } else {
-            b->setFixedSize(52, 40);   // 开始/停止: 调小
-            b->setStyleSheet(QString::fromUtf8(
-                "background:#00B027; color:#FFFFFF; font-weight:bold; border-radius:6px;"
-                "font-size:13px; padding:0 4px;"));
+        b->setText(QString::fromUtf8(texts[i]));
+        // PNG 图标 (SVG 已预转 PNG 嵌入资源, 板子无需 Qt5Svg 插件):
+        // 注册 Normal+Disabled 两个模式, 禁用态(停止未运行时)保持橙色不被 Qt 置灰
+        {
+            QIcon ic(QPixmap(QString::fromUtf8(svg_icons[i])));
+            ic.addPixmap(QPixmap(QString::fromUtf8(svg_icons[i])), QIcon::Disabled, QIcon::Off);
+            b->setIcon(ic);
         }
-        if (i == 7) { b->setObjectName("stopBtn"); b->setStyleSheet(QString::fromUtf8("background:#D32F2F; color:#FFFFFF; font-weight:bold; border-radius:6px; font-size:13px; padding:0 4px;")); }
+        b->setIconSize(QSize(22, 22));
+        // 竖排按钮统一风格(轮廓+橙色), 开始/停止靠图标形状区分(▶播放/ⓧ关闭)
+        b->setFixedSize(80, 62);
+        if (i == 6) { b->setObjectName("startBtn"); }
+        if (i == 7) { b->setObjectName("stopBtn"); }
         lay->addWidget(b);
         // 信号连接
         switch (i) {
@@ -334,25 +427,6 @@ void IndustrialUI::buildTopBar() {
         }
     }
     lay->addStretch(1);
-
-    // 右侧窗口控制 (最小化/最大化/关闭)
-    QToolButton* b_min = new QToolButton(toolbar_widget);
-    b_min->setText(QString::fromUtf8("—"));
-    b_min->setToolTip(QString::fromUtf8("最小化"));
-    connect(b_min, &QToolButton::clicked, this, &QWidget::showMinimized);
-    QToolButton* b_max = new QToolButton(toolbar_widget);
-    b_max->setText(QString::fromUtf8("□"));
-    b_max->setToolTip(QString::fromUtf8("最大化"));
-    connect(b_max, &QToolButton::clicked, this, [this]() {
-        isMaximized() ? showNormal() : showMaximized();
-    });
-    QToolButton* b_close = new QToolButton(toolbar_widget);
-    b_close->setText(QString::fromUtf8("✕"));
-    b_close->setToolTip(QString::fromUtf8("关闭"));
-    connect(b_close, &QToolButton::clicked, this, &QWidget::close);
-    lay->addWidget(b_min);
-    lay->addWidget(b_max);
-    lay->addWidget(b_close);
 }
 
 void IndustrialUI::buildMainArea() {
@@ -369,7 +443,8 @@ void IndustrialUI::buildMainArea() {
     // 渲染区: 棋盘格背景 + 视频帧 + 围栏叠加 (RenderView 自绘, 见 paintEvent)
     lbl_video = new RenderView();
     lbl_video->setObjectName("renderView");
-    lbl_video->setMinimumSize(700, 460);
+    // 最小尺寸放宽: 让窗口缩小时渲染区跟随缩放, 视频帧在区内等比显示
+    lbl_video->setMinimumSize(400, 240);
     left_lay->addWidget(lbl_video, 1);
 
     // 视频信息栏
@@ -388,9 +463,10 @@ void IndustrialUI::buildMainArea() {
     lbl_ok_card->setObjectName("okCard");
     lbl_ok_card->setProperty("state", "idle");
     lbl_ok_card->setAlignment(Qt::AlignCenter);
+    // 报警卡: 高度弹性伸缩, 占据右侧约 1/2 (stretch 1:1 与事件表分高度)
     lbl_ok_card->setMinimumHeight(200);
-    lbl_ok_card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    right_lay->addWidget(lbl_ok_card);
+    lbl_ok_card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    right_lay->addWidget(lbl_ok_card, 1);
 
     QGroupBox* ev = new QGroupBox(QString::fromUtf8("事件记录"));
     QWidget* ev_wrap = new QWidget(ev);   // 表格 + 空态提示叠在同一格
@@ -408,7 +484,7 @@ void IndustrialUI::buildMainArea() {
     lbl_empty_events = new QLabel(QString::fromUtf8("暂无事件记录"), ev_wrap);
     lbl_empty_events->setAlignment(Qt::AlignCenter);
     lbl_empty_events->setStyleSheet(QString::fromUtf8(
-        "background: rgba(255,255,255,190); color:#666666; font-size:14px;"));
+        "background: transparent; color:#888888; font-size:14px;"));
     lbl_empty_events->raise();
     ev_gl->addWidget(tbl_events, 0, 0);
     ev_gl->addWidget(lbl_empty_events, 0, 0);
@@ -421,7 +497,6 @@ void IndustrialUI::buildMainArea() {
 
 void IndustrialUI::buildStatusBar() {
     statusBar()->setObjectName("statusBar");
-    lbl_user = new QLabel(QString::fromUtf8("用户: ") + qgetenv("USER"));
     lbl_scheme = new QLabel(QString::fromUtf8("方案: 电子围栏"));
     lbl_plc = new QLabel(QString::fromUtf8("● PLC连接: 错误"));
     lbl_plc->setObjectName("statusDot");
@@ -431,7 +506,6 @@ void IndustrialUI::buildStatusBar() {
     lbl_cam->setProperty("bad", "true");
     lbl_disk = new QLabel();
     lbl_clock = new QLabel(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
-    statusBar()->addWidget(lbl_user);
     statusBar()->addWidget(lbl_scheme);
     statusBar()->addPermanentWidget(lbl_plc);
     statusBar()->addPermanentWidget(lbl_cam);
@@ -599,7 +673,7 @@ void IndustrialUI::start() {
     if (var["sudo"] == "true" && not_root) {
         var["sudo"] = "false";
         log(QString::fromUtf8("[警告] 勾选了「使用sudo」但界面非 root 启动: Detect 会以 root 运行, 停止按钮将失效。"
-                              "已自动取消勾选, 以普通用户运行 Detect(NPU 无需 root)。如需 root 请用 sudo ./DetectUI2 启动界面。"));
+                              "已自动取消勾选, 以普通用户运行 Detect(NPU 无需 root)。如需 root 请用 sudo ./JEEFence 启动界面。"));
     }
     saveSettings();   // 记录本次使用的模型/阈值等, 下次打开自动恢复
     clearStats();
@@ -631,7 +705,7 @@ void IndustrialUI::stop() {
 #ifndef _WIN32
             if (::kill(-(pid_t)pid, SIGTERM) != 0)
                 log(QString::fromUtf8("[停止] 停止信号发送失败(errno=%1): Detect 可能以 root 运行而界面是普通用户, "
-                                      "请用 sudo ./DetectUI2 启动界面或取消勾选「使用sudo」")
+                                      "请用 sudo ./JEEFence 启动界面或取消勾选「使用sudo」")
                         .arg(errno));
 #else
             log(QString::fromUtf8("[停止] Windows 预览版: 请求终止子进程 PID %1").arg(pid));
@@ -864,11 +938,11 @@ void IndustrialUI::addEvent(const QString& type, const QString& pos) {
         QTableWidgetItem* item = new QTableWidgetItem(cells[c]);
         item->setTextAlignment(Qt::AlignCenter);
         if (type == QString::fromUtf8("警报"))
-            item->setForeground(QBrush(QColor(0xD3, 0x2F, 0x2F)));
+            item->setForeground(QBrush(QColor(0xFF, 0x6B, 0x6B)));   // 亮红(深底可见)
         else if (type == QString::fromUtf8("离开"))
-            item->setForeground(QBrush(QColor(0x00, 0x90, 0x27)));
+            item->setForeground(QBrush(QColor(0x66, 0xE0, 0x8A)));   // 亮绿(深底可见)
         else
-            item->setForeground(QBrush(QColor(0x20, 0x20, 0x20)));
+            item->setForeground(QBrush(QColor(0xE0, 0xE0, 0xE0)));   // 浅灰(深底可见)
         tbl_events->setItem(row, c, item);
     }
     tbl_events->scrollToTop();
@@ -1099,7 +1173,11 @@ void IndustrialUI::tlog(const QString& tag, bool once) {
 // ---------------- 对话框 ----------------
 void IndustrialUI::pickVideo() {
     QString p = QFileDialog::getOpenFileName(this, QString::fromUtf8("选择视频"), "/home/orangepi/Videos");
-    if (!p.isEmpty()) var["video"] = p;
+    if (!p.isEmpty()) {
+        var["video"] = p;
+        saveSettings();
+        log(QString::fromUtf8("[视频] 已选择: %1").arg(p));
+    }
 }
 
 void IndustrialUI::openSettings() {
@@ -1119,8 +1197,26 @@ void IndustrialUI::openSettings() {
         g->addWidget(w, r, 1);
         r++;
     };
-    var_file = new QLineEdit(var["video"]);
     var_model = new QLineEdit(var["model"]);
+    // 模型浏览按钮: 选择 models 目录下的 .rknn 模型 (Detect 只认 ../models/ 下的文件名)
+    QPushButton* b_model = new QPushButton(QString::fromUtf8("浏览"));
+    QHBoxLayout* model_row = new QHBoxLayout();
+    model_row->setSpacing(4);
+    model_row->addWidget(var_model, 1);
+    model_row->addWidget(b_model);
+    connect(b_model, &QPushButton::clicked, this, [this]() {
+        QString mdir = QDir::cleanPath(QDir(var["cwd"]).filePath("../models"));
+        if (!QDir(mdir).exists()) mdir = QString("/home/orangepi/rknn_yolov8_bytetrack-main/models");
+        QString p = QFileDialog::getOpenFileName(this, QString::fromUtf8("选择模型"), mdir,
+                                                 QString::fromUtf8("RKNN 模型 (*.rknn)"));
+        if (!p.isEmpty()) {
+            // Detect 固定从 ../models/ 加载, 这里只填文件名
+            if (QDir::cleanPath(QFileInfo(p).absolutePath()) != QDir::cleanPath(mdir))
+                log(QString::fromUtf8("[模型] 注意: 该模型不在默认 models 目录(%1), 请复制到那里, 否则 Detect 找不到")
+                        .arg(mdir));
+            if (var_model) var_model->setText(QFileInfo(p).fileName());
+        }
+    });
     var_cwd = new QLineEdit(var["cwd"]);
     var_conf = new QLineEdit(var["conf"]);
     var_interval = new QLineEdit(var["interval"]);
@@ -1133,8 +1229,9 @@ void IndustrialUI::openSettings() {
     var_fpdir = new QLineEdit(var["fpdir"]);
     var_zone_name = new QLineEdit(var["zone_name"]);
     var_scheme = new QLineEdit(var["scheme"]);
-    addRow(QString::fromUtf8("视频文件:"), var_file);
-    addRow(QString::fromUtf8("模型:"), var_model);
+    g->addWidget(new QLabel(QString::fromUtf8("模型:")), r, 0);
+    g->addLayout(model_row, r, 1);
+    r++;
     addRow(QString::fromUtf8("工作目录:"), var_cwd);
     addRow(QString::fromUtf8("检测阈值:"), var_conf);
     addRow(QString::fromUtf8("抽帧间隔:"), var_interval);
@@ -1189,7 +1286,6 @@ void IndustrialUI::openSettings() {
     v->addWidget(bb);
 
     if (dlg.exec() == QDialog::Accepted) {
-        var["video"] = var_file->text();
         var["model"] = var_model->text();
         var["cwd"] = var_cwd->text();
         var["conf"] = var_conf->text();
@@ -1224,7 +1320,7 @@ void IndustrialUI::openSettings() {
                 .arg(var["model"], var["conf"], var["video"]));
     }
     // 释放对话框内控件, 防悬挂指针 (radio/combo/checkbox 为对话框子控件, 随对话框销毁)
-    var_file = var_model = var_cwd = var_conf = var_interval = nullptr;
+    var_model = var_cwd = var_conf = var_interval = nullptr;
     var_fp_frames = var_miss_frames = var_zone_confirm = var_zone_debounce = nullptr;
     var_log = var_frame = var_fpdir = var_zone_name = var_scheme = nullptr;
 }
@@ -1323,13 +1419,47 @@ void IndustrialUI::openQuery() {
 }
 
 void IndustrialUI::openCanvasDlg() {
-    QMessageBox::information(this, QString::fromUtf8("画布设置"),
-        QString::fromUtf8("围栏名称: %1\n画布背景: 棋盘格").arg(var["zone_name"]));
+    // 围栏设置: 围栏名称 + 画围栏(与旧 detect_ui 的"画围栏"按钮同流程)
+    QDialog dlg(this);
+    dlg.setWindowTitle(QString::fromUtf8("围栏设置"));
+    dlg.resize(420, 160);
+    QVBoxLayout* v = new QVBoxLayout(&dlg);
+
+    QHBoxLayout* row = new QHBoxLayout();
+    row->addWidget(new QLabel(QString::fromUtf8("围栏名称:")));
+    QLineEdit* name_edit = new QLineEdit(var["zone_name"]);
+    row->addWidget(name_edit, 1);
+    v->addLayout(row);
+
+    QLabel* tip = new QLabel(QString::fromUtf8("画围栏: 在弹出来的窗口里点 4 个以上点, 回车保存"));
+    tip->setStyleSheet(QString::fromUtf8("color:#999999; font-size:12px;"));
+    v->addWidget(tip);
+
+    bool want_draw = false;   // 用户是否点了"画围栏"按钮
+    QDialogButtonBox* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    QPushButton* b_draw = bb->addButton(QString::fromUtf8("画围栏"), QDialogButtonBox::ActionRole);
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(b_draw, &QPushButton::clicked, &dlg, [&dlg, &want_draw]() {
+        want_draw = true;
+        dlg.accept();
+    });
+    v->addWidget(bb);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        var["zone_name"] = name_edit->text();
+        saveSettings();
+        log(QString::fromUtf8("[围栏] 名称已设置: %1").arg(var["zone_name"]));
+        if (want_draw) {
+            log(QString::fromUtf8("[围栏] 名称已保存, 开始画围栏..."));
+            drawZone();
+        }
+    }
 }
 
 // ---------------- 设置持久化 ----------------
 QString IndustrialUI::settingsPath() const {
-    return QCoreApplication::applicationDirPath() + "/detectui2.ini";
+    return QCoreApplication::applicationDirPath() + "/jeefence.ini";
 }
 
 void IndustrialUI::loadSettings() {

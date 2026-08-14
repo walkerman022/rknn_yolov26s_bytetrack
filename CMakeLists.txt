@@ -123,10 +123,12 @@ if(Qt5Widgets_FOUND)
   target_link_libraries(DetectUI Qt5::Widgets ${CMAKE_THREAD_LIBS_INIT})
   message(STATUS "DetectUI enabled (Qt5 found)")
 
-  # DetectUI2: 工业暗黑风界面 (ui/电子围栏系统界面设计.md), 独立程序
-  # 单独编译: cd build && make DetectUI2
-  add_executable(DetectUI2 src/industrial_ui.cpp src/industrial_ui.h src/industrial_ui.qrc)
-  target_link_libraries(DetectUI2 Qt5::Widgets ${CMAKE_THREAD_LIBS_INIT})
+  # JEEFence: 工业暗黑风界面 (ui/电子围栏系统界面设计.md), 独立程序
+  # 单独编译: cd build && make JEEFence
+  # qrc 资源: 交叉编译时 sysroot 的 rcc 是 ARM64 版跑不了, 用宿主 rcc 预生成
+  # qrc_industrial_ui.cpp 再编译 (build_cross.sh 里处理), 这里 AUTORCC 照常也兼容
+  add_executable(JEEFence src/industrial_ui.cpp src/industrial_ui.h src/industrial_ui.qrc)
+  target_link_libraries(JEEFence Qt5::Widgets ${CMAKE_THREAD_LIBS_INIT})
 else()
   message(STATUS "Qt5 not found - DetectUI skipped (sudo apt install -y qtbase5-dev)")
 endif()

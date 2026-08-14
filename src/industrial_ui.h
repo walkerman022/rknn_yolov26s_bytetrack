@@ -55,7 +55,19 @@ private:
     int vw = 0, vh = 0;     // 视频分辨率(无帧时用于围栏坐标映射)
 };
 
-// RK3588 电子围栏 - 工业暗黑风界面 (DetectUI2)
+// 可省略的 QLabel: 宽度不足时用省略号(...)替代被裁剪的文字
+class ElidedLabel : public QLabel {
+public:
+    explicit ElidedLabel(const QString& text, QWidget* parent = nullptr)
+        : QLabel(text, parent), full_text(text) {}
+    void setFullText(const QString& t) { full_text = t; setText(t); }
+protected:
+    void paintEvent(QPaintEvent* ev) override;
+private:
+    QString full_text;
+};
+
+// RK3588 电子围栏 - 工业暗黑风界面 (JEEFence)
 // 布局按 ui/电子围栏系统界面设计.md 参考图, 逻辑复用现有 Detect 日志协议
 class IndustrialUI : public QMainWindow {
     Q_OBJECT
@@ -67,6 +79,8 @@ public:
 
 private:
     // ---- UI 控件 ----
+    QWidget* toolbar_widget = nullptr;  // 顶部横条(Logo+名称+窗口控制)
+    QWidget* sidebar_widget = nullptr;  // 左侧竖排功能按钮栏
     RenderView* lbl_video = nullptr;    // 渲染区(棋盘格 + 视频帧 + 围栏叠加)
     QLabel* lbl_ok_card = nullptr;      // OK/NG 状态卡
     QLabel* lbl_video_info = nullptr;   // 视频信息: 处理/实时FPS/分辨率/帧号
@@ -80,7 +94,6 @@ private:
     QToolButton* btn_start = nullptr;
     QToolButton* btn_stop = nullptr;
 
-    QLabel* lbl_user = nullptr;         // 状态栏: 当前用户
     QLabel* lbl_scheme = nullptr;       // 状态栏: 方案名称
     QLabel* lbl_plc = nullptr;          // 状态栏: PLC连接
     QLabel* lbl_cam = nullptr;          // 状态栏: 相机连接
@@ -88,11 +101,9 @@ private:
     QLabel* lbl_clock = nullptr;        // 状态栏: 精确时间
 
     // ---- 工具栏/对话框成员 ----
-    QWidget* toolbar_widget = nullptr;
     QHBoxLayout* main_layout = nullptr;
     // 设置对话框控件 (仅对话框 exec 期间有效, 关闭后置 nullptr;
     // 运行逻辑一律读取 var map, 不直接解引用这些指针)
-    QLineEdit* var_file = nullptr;
     QLineEdit* var_model = nullptr;
     QLineEdit* var_cwd = nullptr;
     QLineEdit* var_conf = nullptr;
@@ -137,6 +148,7 @@ private:
     // ---- 界面构建 ----
     void buildUi();
     void buildTopBar();
+    void buildSideBar();
     void buildMainArea();
     void buildStatusBar();
     void updateDiskInfo();

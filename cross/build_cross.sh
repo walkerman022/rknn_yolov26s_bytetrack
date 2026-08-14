@@ -2,7 +2,7 @@
 # 交叉编译 Detect:  bash cross/build_cross.sh
 set -e
 export RK_SYSROOT="${RK_SYSROOT:-$HOME/rk3588_sysroot}"
-export PKG_CONFIG_PATH="$RK_SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig"
+export PKG_CONFIG_PATH="$RK_SYSROOT/usr/local/lib/aarch64-linux-gnu/pkgconfig:$RK_SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig"
 BUILD="build_cross"
 mkdir -p "$BUILD"
 cd "$BUILD"
@@ -24,6 +24,7 @@ CRT_END="/usr/lib/gcc-cross/aarch64-linux-gnu/9/crtend.o $RK_SYSROOT/usr/lib/aar
 cmake .. -DCMAKE_TOOLCHAIN_FILE=../cross/toolchain-rk3588.cmake \
          -DTARGET_SOC=rk3588 \
          -DCMAKE_C_FLAGS="$INCLUDE_FLAGS" -DCMAKE_CXX_FLAGS="$INCLUDE_FLAGS" \
+         -DQT_RCC_EXECUTABLE=/usr/lib/qt5/bin/rcc \
          -DCMAKE_EXE_LINKER_FLAGS="-nostartfiles $CRT_FILES \
          -L$RK_SYSROOT/lib/aarch64-linux-gnu -L$RK_SYSROOT/usr/lib/aarch64-linux-gnu \
          -Wl,-rpath-link,$RK_SYSROOT/lib/aarch64-linux-gnu -Wl,-rpath-link,$RK_SYSROOT/usr/lib/aarch64-linux-gnu -Wl,-rpath-link,$RK_SYSROOT/usr/local/lib/aarch64-linux-gnu -Wl,-rpath-link,$RK_SYSROOT/usr/lib $CRT_END" \
