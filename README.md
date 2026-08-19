@@ -1,4 +1,4 @@
-RK3588部署yolov8目标检测模型+bytetrack目标跟踪算法
+RK3588部署yolov26s目标检测模型+bytetrack目标跟踪算法
 
 Reference:
 
