@@ -20,6 +20,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
+#include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QGuiApplication>
@@ -52,12 +53,17 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QTextStream>
 #include <QVBoxLayout>
+#include <QVector>
+#include <QWindow>
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #ifdef _WIN32
 #define NOMINMAX
@@ -112,7 +118,8 @@ void ElidedLabel::paintEvent(QPaintEvent* ev) {
     p.drawText(rect(), alignment(), elided);
 }
 
-// ---------------- RenderView (渲染区: 棋盘格 + 视频帧 + 围栏叠加) ----------------
+// ---------------- RenderView (渲染区: 棋盘格 + 视频帧) ----------------
+// 围栏由 Detect 直接绘制在视频帧上(frame.jpg), 界面不再自行叠加, 避免重影
 void RenderView::paintEvent(QPaintEvent* ev) {
     Q_UNUSED(ev);
     QPainter p(this);
@@ -132,36 +139,13 @@ void RenderView::paintEvent(QPaintEvent* ev) {
     p.drawRect(rect().adjusted(0, 0, -1, -1));
 
     // 2) 视频帧: 等比缩放居中 (无帧时无操作)
-    QRect vr;   // 帧在控件内的目标矩形(缩放+居中)
     if (!frame.isNull()) {
         QSize s = frame.size().scaled(size(), Qt::KeepAspectRatio);
-        vr = QRect((width() - s.width()) / 2, (height() - s.height()) / 2,
-                   s.width(), s.height());
+        QRect vr = QRect((width() - s.width()) / 2, (height() - s.height()) / 2,
+                         s.width(), s.height());
+        // SmoothPixmapTransform: 720p 源缩到窗口大小时平滑缩放, 避免块状锯齿观感
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
         p.drawPixmap(vr, frame);
-    }
-
-    // 3) 围栏多边形: 半透明橙填充 + 描边; 坐标从视频像素映射到控件
-    if (hasZone) {
-        QPolygonF mapped;
-        if (!frame.isNull()) {
-            // 帧映射: 视频坐标 → 控件坐标 (等比缩放的线性映射)
-            double sx = double(vr.width()) / frame.width();
-            double sy = double(vr.height()) / frame.height();
-            double ox = vr.x(), oy = vr.y();
-            for (const QPointF& pt : zone) mapped << QPointF(pt.x() * sx + ox, pt.y() * sy + oy);
-        } else if (vw > 0 && vh > 0) {
-            // 无帧: 用已知分辨率等比映射到控件(棋盘格满幅)
-            QSize s = QSize(vw, vh).scaled(size(), Qt::KeepAspectRatio);
-            int x0 = (width() - s.width()) / 2, y0 = (height() - s.height()) / 2;
-            double sx = double(s.width()) / vw;
-            double sy = double(s.height()) / vh;
-            for (const QPointF& pt : zone) mapped << QPointF(pt.x() * sx + x0, pt.y() * sy + y0);
-        } else {
-            mapped = zone;   // 未知分辨率: 按原始坐标画(少见)
-        }
-        p.setBrush(QColor(255, 153, 0, 60));
-        p.setPen(QPen(QColor(255, 153, 0, 200), 2));
-        p.drawPolygon(mapped);
     }
 }
 
@@ -249,11 +233,16 @@ IndustrialUI::IndustrialUI(QWidget* parent) : QMainWindow(parent) {
     resize(1360, 800);
     // 最小窗口: 1080p 分辨率下适中 (1280x720 即可完整容纳全部功能)
     setMinimumSize(1280, 720);
-    QRect scr = QGuiApplication::primaryScreen()->availableGeometry();
-    move(scr.center() - rect().center());
+    normal_geo = geometry();   // 初始化正常几何: 最大化还原时恢复到它(避免被最大化覆盖)
     setStyleSheet(QString::fromUtf8(STYLE_SHEET));
-    // 无边框: 去掉系统标题栏(最小化/最大化/关闭由自建顶部横条右侧按钮提供)
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    // 系统原生标题栏(去无边框): MobaXterm X11 转发下无窗口管理器, 自定义无边框的
+    // 最小化/最大化/关闭全失效(WM 协议无人处理)。改用系统标题栏后, 这些操作由
+    // Windows 端原生处理(最小化到任务栏/最大化/关闭), 零坑。顶栏 Logo 仍保留。
+    setWindowFlags(Qt::Window);
+    // 启动位置: 不固定到任何屏, 由 loadSettings() 恢复上次保存的位置;
+    // 首次启动 Qt 默认居中到虚拟屏(用户可自行拖动, 位置会持久化)
+    diagnoseScreens();
+    main_screen = QGuiApplication::primaryScreen();   // 仅用于诊断/几何参考, 不强制锁定
 
     var["mode"] = "fp+miss";
     var["src"] = "run";
@@ -284,7 +273,7 @@ IndustrialUI::IndustrialUI(QWidget* parent) : QMainWindow(parent) {
 
     timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &IndustrialUI::poll);
-    timer->start(120);
+    timer->start(33);   // ~30fps 轮询 (之前 120ms 只有 8fps 轮询, 画面掉帧, 与 detect_ui 一致)
     // 状态栏时钟每秒刷新
     QTimer* clock = new QTimer(this);
     connect(clock, &QTimer::timeout, this, [this]() {
@@ -343,39 +332,8 @@ void IndustrialUI::buildTopBar() {
     name->setMinimumWidth(0);
     lay->addWidget(name, 1);   // stretch=1: 随窗口缩放, 超宽省略
     lay->addStretch(1);
-
-    // 右侧窗口控制 (最小化/最大化/关闭) - 独立容器, 固定右侧不被布局挤压
-    QWidget* wctl = new QWidget(toolbar_widget);
-    QHBoxLayout* wctl_lay = new QHBoxLayout(wctl);
-    wctl_lay->setContentsMargins(0, 0, 0, 0);
-    wctl_lay->setSpacing(2);
-    QToolButton* b_min = new QToolButton(wctl);
-    b_min->setObjectName("winCtl");
-    b_min->setToolButtonStyle(Qt::ToolButtonTextOnly);   // 默认 IconOnly 不显示文字
-    b_min->setText(QString::fromUtf8("—"));
-    b_min->setFixedSize(36, 36);
-    b_min->setToolTip(QString::fromUtf8("最小化"));
-    connect(b_min, &QToolButton::clicked, this, &QWidget::showMinimized);
-    QToolButton* b_max = new QToolButton(wctl);
-    b_max->setObjectName("winCtl");
-    b_max->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    b_max->setText(QString::fromUtf8("□"));
-    b_max->setFixedSize(36, 36);
-    b_max->setToolTip(QString::fromUtf8("最大化"));
-    connect(b_max, &QToolButton::clicked, this, [this]() {
-        isMaximized() ? showNormal() : showMaximized();
-    });
-    QToolButton* b_close = new QToolButton(wctl);
-    b_close->setObjectName("winCtl");
-    b_close->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    b_close->setText(QString::fromUtf8("✕"));
-    b_close->setFixedSize(36, 36);
-    b_close->setToolTip(QString::fromUtf8("关闭"));
-    connect(b_close, &QToolButton::clicked, this, &QWidget::close);
-    wctl_lay->addWidget(b_min);
-    wctl_lay->addWidget(b_max);
-    wctl_lay->addWidget(b_close);
-    lay->addWidget(wctl);
+    // 窗口控制按钮已移除: 改用系统原生标题栏后, 最小化/最大化/关闭由
+    // Windows 端原生处理(MobaXterm X11 转发下无 WM, 自定义按钮全部失效)。
 }
 
 void IndustrialUI::buildSideBar() {
@@ -388,9 +346,10 @@ void IndustrialUI::buildSideBar() {
     lay->setSpacing(8);
 
     // PNG 图标资源 (由 SVG 预转, 已嵌入 qrc; 板子无需 Qt5Svg)
+    // 打开视频/系统参数/相机设备/外部通信 用新图标, 其余沿用旧图标
     static const char* const svg_icons[] = {
-        ":/icons_png/settings.png", ":/icons_png/camera.png", ":/icons_png/data.png",
-        ":/icons_png/settings.png", ":/icons_png/data.png", ":/icons_png/fence.png",
+        ":/icons_png/folder.png", ":/icons_png/settings.png", ":/icons_png/camera.png",
+        ":/icons_png/comm.png", ":/icons_png/data.png", ":/icons_png/fence.png",
         ":/icons_png/run.png", ":/icons_png/stop.png",
     };
     const char* texts[] = {
@@ -543,11 +502,10 @@ bool IndustrialUI::nativeEvent(const QByteArray& eventType, void* message, long*
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 
-// 顶部横条拖动 (鼠标事件只在无子控件区域/空白处能到达主窗口, 足够拖动)
+// 系统原生标题栏下不再需要顶栏拖动; 只保留最小化(缩小)态的"点击还原"入口
 void IndustrialUI::mousePressEvent(QMouseEvent* ev) {
-    if (ev->button() == Qt::LeftButton &&
-        toolbar_widget && toolbar_widget->geometry().contains(ev->pos())) {
-        drag_offset = ev->globalPos() - frameGeometry().topLeft();
+    if (win_minimized) {
+        doRestore();
         ev->accept();
         return;
     }
@@ -555,17 +513,257 @@ void IndustrialUI::mousePressEvent(QMouseEvent* ev) {
 }
 
 void IndustrialUI::mouseMoveEvent(QMouseEvent* ev) {
-    if (ev->buttons() & Qt::LeftButton && !drag_offset.isNull()) {
-        move(ev->globalPos() - drag_offset);
-        ev->accept();
-        return;
-    }
     QMainWindow::mouseMoveEvent(ev);
 }
 
 void IndustrialUI::mouseReleaseEvent(QMouseEvent* ev) {
-    if (ev->button() == Qt::LeftButton) drag_offset = QPoint();
     QMainWindow::mouseReleaseEvent(ev);
+}
+
+// 窗口操作诊断: 每次按钮点击写一行到 /tmp/jeefence_win.log, 供远程排查
+// (SSH 转发下看不到界面日志, 点按钮后读这个文件就知道 Qt 实际做了什么)
+static void winlog(const QString& msg) {
+    FILE* f = fopen("/tmp/jeefence_win.log", "a");
+    if (f) {
+        fprintf(f, "%s %s\n",
+                QDateTime::currentDateTime().toString("HH:mm:ss").toUtf8().constData(),
+                msg.toUtf8().constData());
+        fclose(f);
+    }
+}
+
+void IndustrialUI::moveEvent(QMoveEvent* ev) {
+    // 持续记录窗口的正常位置(非最大化/最小化时): 最小化还原要回到用户拖动的位置。
+    // 注意: MobaXterm 在最小化前一刻会把窗口位置重置为 (0,0) 并触发一次 moveEvent,
+    // 若记录会覆盖用户真实位置(日志: 用户拖到 4768,282 → 最小化前一瞬被记成 0,0)。
+    // 因此跳过 (0,0) 位置(用户不会把窗口贴到左上角当"正常位置")。
+    QPoint p = ev->pos();
+    if (!win_maximized && !win_minimized && (p.x() != 0 || p.y() != 0)) {
+        normal_geo.moveTopLeft(p);
+        winlog(QString::fromUtf8("moveEvent → normal_geo=%1x%2+%3+%4")
+                   .arg(normal_geo.width()).arg(normal_geo.height())
+                   .arg(normal_geo.x()).arg(normal_geo.y()));
+    }
+    QMainWindow::moveEvent(ev);
+}
+
+void IndustrialUI::changeEvent(QEvent* ev) {
+    // 窗口状态变化: WM 真实最小化/最大化切换时同步内部标志 + 自动还原
+    //   - 任务栏点击图标 → WM 去最小化 → Qt 发 WindowStateChange
+    //     → 检测 WindowMinimized 标志被清 → 调 doRestore()
+    //   - 双击标题栏 / WM 最大化 → 检测 WindowMaximized 标志被置
+    //     → 同步几何到锁定主屏(避免 WM 铺到合并屏)
+    if (ev->type() == QEvent::WindowStateChange) {
+        Qt::WindowStates st = windowState();
+        bool now_min = st & Qt::WindowMinimized;
+        bool now_max = st & Qt::WindowMaximized;
+        winlog(QString::fromUtf8("changeEvent WindowStateChange: min=%1 max=%2 (win_min=%3 win_max=%4) geo=%5x%6+%7+%8")
+                   .arg(now_min ? "Y" : "N").arg(now_max ? "Y" : "N")
+                   .arg(win_minimized ? "Y" : "N").arg(win_maximized ? "Y" : "N")
+                   .arg(width()).arg(height()).arg(x()).arg(y()));
+        if (now_min != win_minimized) {
+            win_minimized = now_min;
+            if (now_min) {
+                // 位置由 moveEvent 持续记录(正常状态下拖动时更新 normal_geo),
+                // 这里不读取 geometry —— 最小化瞬间 MobaXterm 会把位置重置为 (0,0)。
+            } else {
+                // 从最小化恢复: 统一回到正常几何(normal_geo)。
+                // 不恢复最大化尺寸 —— 用户期望还原后是"原来的正常界面",
+                // 而非最大化的巨大尺寸(此前 bug: 还原后放大很多倍)。
+                win_maximized = false;
+                winlog(QString::fromUtf8("还原: normal_geo=%1x%2+%3+%4, 当前 geo=%5x%6+%7+%8")
+                           .arg(normal_geo.width()).arg(normal_geo.height())
+                           .arg(normal_geo.x()).arg(normal_geo.y())
+                           .arg(width()).arg(height()).arg(x()).arg(y()));
+                setGeometry(normal_geo);
+                log(QString::fromUtf8("[窗口] WM 触发还原 → 正常几何 %1x%2+%3+%4")
+                        .arg(normal_geo.width()).arg(normal_geo.height())
+                        .arg(normal_geo.x()).arg(normal_geo.y()));
+            }
+        }
+        if (now_max != win_maximized) {
+            win_maximized = now_max;
+            if (now_max) {
+                // normal_geo 在构造时已保存正常尺寸, 这里只铺满虚拟屏, 不覆盖 normal_geo
+                // (否则还原会恢复到最大化时的巨大尺寸)
+                setGeometry(mainScreenGeom());
+            }
+        }
+    } else if (ev->type() == QEvent::ActivationChange && win_minimized && isActiveWindow()) {
+        // 兜底: X11 缩小角标模式下窗口重新激活时还原
+        // (此时 win_minimized=true 但 windowState 没有 WindowMinimized 标志,
+        //  上面的 WindowStateChange 分支不会触发)
+        doRestore();
+    }
+    QMainWindow::changeEvent(ev);
+}
+
+// ---------------- 无 WM(X11 转发)下的最大化/最小化 ----------------
+// 不再固定/锁定任何屏: 直接使用 Qt 的 primaryScreen(虚拟屏)几何,
+// 最大化时按窗口当前位置适配所在屏(见 toggleMaximize)。
+QScreen* IndustrialUI::lockedMainScreen() {
+    if (main_screen) return main_screen;
+    main_screen = QGuiApplication::primaryScreen();
+    return main_screen;
+}
+
+// 打印 Qt 看到的所有 screen 信息: 启动时一行, 帮助定位主屏错锁问题
+// 同时写入 /tmp/jeefence_screens.log 供远程诊断(SSH 终端看不到界面日志时也能查)
+void IndustrialUI::diagnoseScreens() {
+    const QList<QScreen*> scrs = QGuiApplication::screens();
+    QStringList lines;
+    for (int i = 0; i < scrs.size(); ++i) {
+        QScreen* s = scrs[i];
+        QRect g = s->availableGeometry();
+        QSize phys = s->size();
+        QString line = QString::fromUtf8("[屏幕#%1] name=%2 avail=%3x%4+%5+%6 phys=%7x%8 primary=%9")
+                .arg(i).arg(s->name())
+                .arg(g.width()).arg(g.height()).arg(g.x()).arg(g.y())
+                .arg(phys.width()).arg(phys.height())
+                .arg(s == QGuiApplication::primaryScreen() ? "YES" : "no");
+        log(line);
+        lines << line;
+    }
+    QFile f(QString::fromUtf8("/tmp/jeefence_screens.log"));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Append)) {
+        QTextStream ts(&f);
+        ts << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") << "\n"
+           << lines.join("\n") << "\n";
+        f.close();
+    }
+}
+
+// 虚拟屏几何: 直接返回 primaryScreen 的完整几何(不再裁剪/锁定 2.5K)
+QRect IndustrialUI::mainScreenGeom() {
+    QScreen* m = lockedMainScreen();
+    if (!m) return QRect(0, 0, 2560, 1440);
+    return m->geometry();
+}
+
+// 通过 MobaXterm 等 X 转发显示时没有窗口管理器, Qt 的 showMinimized/
+// showMaximized 发 _NET_WM_STATE 消息无人接收 → 点击无反应。
+// 这里优先尝试真最小化(showMinimized 让 WM 处理任务栏图标 + 状态),
+// 50ms 后检查 WM 是否真的接受了; 没接受才降级到缩小角标方案。
+//   最大化 = setGeometry 铺满主屏(2.5K)可用区; setGeometry 比 showMaximized
+//   更可控(避免 WM 把窗口铺到 taskbar 后面)。
+// 注意: 不能用 Xlib XUnmapWindow 直接操作 Qt 窗口 —— Qt 内部仍认为窗口可见,
+// 继续渲染时 xcb 收到 X 错误会 abort() 直接终止进程(已踩坑)。
+void IndustrialUI::toggleMaximize() {
+    if (win_minimized) { doRestore(); return; }   // 先还原最小化状态, 再走最大化逻辑
+    if (win_maximized) {
+        // 还原
+        winlog(QString::fromUtf8("toggleMaximize -> 还原 normal_geo=%1x%2+%3+%4, 当前=%5x%6+%7+%8")
+                   .arg(normal_geo.width()).arg(normal_geo.height())
+                   .arg(normal_geo.x()).arg(normal_geo.y())
+                   .arg(width()).arg(height()).arg(x()).arg(y()));
+        setGeometry(normal_geo);
+        win_maximized = false;
+        show();   // 若之前最小化过, 确保可见
+    } else {
+        QRect cur = geometry();
+        normal_geo = cur;   // 保存当前几何(位置+大小), 还原时恢复
+        // 根据窗口当前位置判断在哪个屏, 最大化铺满对应屏:
+        //   MobaXterm 虚拟屏 = 4480x1080(2.5K 左 + 1K 右, 高度被 1K 屏限制成 1080)
+        //   窗口中心 x < 2560 → 在 2.5K 屏 → 铺 2560x1440(超出虚拟屏高度,
+        //     MobaXterm 在 2.5K 屏上完整显示, 解决"上下没铺满")
+        //   窗口中心 x >= 2560 → 在 1K 屏 → 铺 1920x1080(适配 1K, 字不缩小)
+        QRect vg = QGuiApplication::primaryScreen()->geometry();
+        // 动态屏边界: 2.5K 屏与 1K 屏宽度比固定 2560:1920 = 4:3,
+        // 虚拟屏可能被 MobaXterm DPI 缩放(如 4480x1080 → 6720x1620),
+        // 不能用硬编码 2560 判断, 按比例算 2.5K 屏右边界
+        int boundary = vg.width() * 4 / 7;
+        QRect target;
+        if (cur.x() + cur.width() / 2 < boundary) {
+            target = QRect(0, 0, 2560, 1440);   // 2.5K 屏全尺寸
+        } else {
+            target = QRect(boundary, 0, 1920, 1080); // 1K 屏全尺寸
+        }
+        winlog(QString::fromUtf8("toggleMaximize -> 窗口中心 x=%1, 铺 %2x%3+%4+%5")
+                   .arg(cur.x() + cur.width() / 2)
+                   .arg(target.width()).arg(target.height())
+                   .arg(target.x()).arg(target.y()));
+        log(QString::fromUtf8("[窗口] 最大化到 %1x%2 (位置 %3,%4)")
+                .arg(target.width()).arg(target.height())
+                .arg(target.x()).arg(target.y()));
+        setGeometry(target);
+        win_maximized = true;
+    }
+}
+
+void IndustrialUI::doMinimize() {
+    if (win_minimized) { doRestore(); return; }   // 已最小化 → 还原
+    normal_geo = geometry();   // 记住当前位置(还原时恢复)
+    win_minimized = true;
+    winlog(QString::fromUtf8("doMinimize 请求(当前=%1x%2+%3+%4)")
+               .arg(width()).arg(height()).arg(x()).arg(y()));
+    // 先尝试标准最小化: showMinimized() 让 WM/Windows 端处理任务栏图标 + 状态。
+    // MobaXterm(SSH X11 转发)若没有 WM, showMinimized 不生效(窗口不动)——
+    // 300ms 后检测到"窗口仍可见且状态未置 MIN"就回退到"缩小窗口"方案。
+    showMinimized();
+    winlog(QString::fromUtf8("doMinimize 已请求 showMinimized, state=%1")
+               .arg(windowState() & Qt::WindowMinimized ? "MIN" : "norm"));
+    log(QString::fromUtf8("[窗口] 已最小化, 点任务栏图标还原"));
+    // 300ms 后检测: 若 showMinimized 没生效(无 WM)→ 缩小窗口到主屏右下角(可还原)
+    QTimer::singleShot(300, this, [this]() {
+        if (!win_minimized) return;                       // 已还原, 忽略
+        if (windowState() & Qt::WindowMinimized) {
+            startMinimizePoll();                          // 真最小化生效, 走轮询还原
+            return;
+        }
+        if (!isVisible()) return;                         // 窗口已隐藏(有 WM), 等任务栏点击
+        // showMinimized 无效(无 WM): 缩小窗口模拟最小化, 点窗口/任务栏图标还原
+        winlog(QString::fromUtf8("showMinimized 无 WM 未生效, 回退缩小窗口"));
+        setMinimumSize(1, 1);   // 临时放开最小尺寸, 否则 320x200 被 1280x720 钳制缩不小
+        QRect scr = QGuiApplication::primaryScreen()->availableGeometry();
+        int w = 320, h = 200;
+        setGeometry(scr.x() + scr.width() - w - 8,
+                    scr.y() + scr.height() - h - 8, w, h);
+        log(QString::fromUtf8("[窗口] 无 WM, 已缩小到主屏右下角, 点击窗口还原"));
+        startMinimizePoll();
+    });
+}
+
+// 最小化后的激活轮询: 窗口重新获得焦点(点任务栏图标)或状态不再是 MIN 就还原
+void IndustrialUI::startMinimizePoll() {
+    QTimer* t = new QTimer(this);
+    t->setInterval(300);
+    // 最小化冷却: 刚 showMinimized 的瞬间窗口可能仍处于激活状态(isActiveWindow 为
+    // true), 若立即检测会误判"已还原"→ 窗口弹回。前 1.5s 内不检测"激活",
+    // 只检测状态标志(真正被 WM 处理恢复时状态会从 MIN 变为 normal)。
+    const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
+    const qint64 COOLDOWN = 1500;
+    connect(t, &QTimer::timeout, this, [this, t, t0, COOLDOWN]() {
+        if (!win_minimized) { t->stop(); t->deleteLater(); return; }
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        bool state_cleared = !(windowState() & Qt::WindowMinimized);
+        // 状态标志已被清(WM 处理了恢复)→ 立即还原, 不受冷却限制
+        if (state_cleared) {
+            t->stop(); t->deleteLater();
+            doRestore();
+            return;
+        }
+        // 冷却期结束后才允许"窗口重新激活"触发还原(点任务栏图标)
+        if (now - t0 >= COOLDOWN && isActiveWindow()) {
+            t->stop(); t->deleteLater();
+            doRestore();
+        }
+    });
+    t->start();
+}
+
+void IndustrialUI::doRestore() {
+    win_minimized = false;
+    winlog(QString::fromUtf8("doRestore 请求(当前=%1x%2+%3+%4)")
+               .arg(width()).arg(height()).arg(x()).arg(y()));
+    // 先把 Qt 内部的 WindowMinimized flag 去掉(任务栏点击后 Qt 已自动清, 但
+    // 我们手动触发时也要清, 否则 showNormal 不会生效)
+    if (windowState() & Qt::WindowMinimized) {
+        setWindowState(windowState() & ~Qt::WindowMinimized);
+    }
+    setMinimumSize(1280, 720);   // 恢复最小尺寸(doMinimize 里为缩小角标临时放开过)
+    setGeometry(normal_geo);   // 恢复缩小前的正常几何
+    showNormal();              // showNormal 会取消最小化标志 + 触发 WindowStateChange
+    win_maximized = false;     // 还原后回到正常状态, 不再保持最大化
 }
 
 // ---------------- 工具 ----------------
@@ -594,34 +792,6 @@ void IndustrialUI::setDefaultVideo() {
     } else {
         var["video"] = "";
         log(QString::fromUtf8("未在 /home/orangepi/Videos 找到视频文件, 请手动选择"));
-    }
-}
-
-void IndustrialUI::loadZone() {
-    // 读取 models/zone.txt 围栏顶点(x,y 每行, # 注释), 画到渲染区 (main_MultiDetect.cpp 同格式)
-    QPolygonF poly;
-    QFile f(zonePath());
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        while (!f.atEnd()) {
-            QString line = QString::fromUtf8(f.readLine()).trimmed();
-            if (line.isEmpty() || line.startsWith('#')) continue;
-            QStringList xy = line.split(',');
-            if (xy.size() >= 2) {
-                bool okx = false, oky = false;
-                double x = xy[0].trimmed().toDouble(&okx);
-                double y = xy[1].trimmed().toDouble(&oky);
-                if (okx && oky) poly << QPointF(x, y);
-            }
-        }
-        f.close();
-    }
-    if (poly.size() >= 3) {
-        lbl_video->setZonePolygon(poly);
-        log(QString::fromUtf8("围栏已加载: %1 个顶点 (%2)").arg(poly.size()).arg(zonePath()));
-    } else {
-        lbl_video->setZonePolygon(QPolygonF());
-        if (QFileInfo::exists(zonePath()))
-            log(QString::fromUtf8("围栏文件顶点不足 3 个, 不叠加: ") + zonePath());
     }
 }
 
@@ -930,7 +1100,8 @@ void IndustrialUI::addEvent(const QString& type, const QString& pos) {
     if (!tbl_events) return;
     if (lbl_empty_events) lbl_empty_events->hide();   // 有事件了, 收起空态提示
     event_seq++;
-    int row = 0;
+    // 事件表按时间顺序从上到下排列: 序号 1 在最上面, 新事件追加到末尾(不插顶部)
+    int row = tbl_events->rowCount();
     tbl_events->insertRow(row);
     QString timeStr = QDateTime::currentDateTime().toString("HH:mm:ss");
     QStringList cells = { QString::number(event_seq), timeStr, type, pos };
@@ -945,9 +1116,9 @@ void IndustrialUI::addEvent(const QString& type, const QString& pos) {
             item->setForeground(QBrush(QColor(0xE0, 0xE0, 0xE0)));   // 浅灰(深底可见)
         tbl_events->setItem(row, c, item);
     }
-    tbl_events->scrollToTop();
+    tbl_events->scrollToBottom();
     // 事件表行数上限, 防无限增长
-    while (tbl_events->rowCount() > 5000) tbl_events->removeRow(tbl_events->rowCount() - 1);
+    while (tbl_events->rowCount() > 5000) tbl_events->removeRow(0);
     updateOkCard();
 }
 
@@ -1009,18 +1180,15 @@ void IndustrialUI::clearStats() {
 void IndustrialUI::updateVideo() {
     QString fp = var["frame"];
     if (fp.isEmpty()) return;
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - last_video_t < 250) return;
     QFileInfo fi(fp);
     if (!fi.exists()) return;
+    // 只按 mtime 判新: 双条件(mtime+size)在 720p 每帧写盘时, 同秒同大小的
+    // 相邻帧会被误判"未更新"漏掉 -> 画面卡顿/回溯 (detect_ui 已修复, 此处同步)
     qint64 mt = fi.lastModified().toMSecsSinceEpoch();
-    qint64 sz = fi.size();
-    if (mt == frame_mt && sz == frame_sz) return;
-    frame_mt = mt; frame_sz = sz;
-    last_video_t = now;
+    if (mt == frame_mt) return;
+    frame_mt = mt;
     QPixmap pm(fp);
     if (!pm.isNull()) {
-        lbl_video->setVideoSize(pm.width(), pm.height());
         lbl_video->setFramePixmap(pm);
         tlog(QString::fromUtf8("画面已显示"), true);
     }
@@ -1082,7 +1250,6 @@ void IndustrialUI::showFpImage(const QString& path) {
 
 void IndustrialUI::onDrawDone() {
     QString zpath = zonePath();
-    if (QFileInfo::exists(zpath)) loadZone();   // 重新读取围栏并叠加到渲染区
     if (pending_run_after_draw) {
         pending_run_after_draw = false;
         if (QFileInfo::exists(zpath)) {
@@ -1172,11 +1339,41 @@ void IndustrialUI::tlog(const QString& tag, bool once) {
 
 // ---------------- 对话框 ----------------
 void IndustrialUI::pickVideo() {
-    QString p = QFileDialog::getOpenFileName(this, QString::fromUtf8("选择视频"), "/home/orangepi/Videos");
-    if (!p.isEmpty()) {
-        var["video"] = p;
-        saveSettings();
-        log(QString::fromUtf8("[视频] 已选择: %1").arg(p));
+    // 实例化对话框以设置局部 QSS: 全局暗色主题会把文件列表文字变灰、表头变黑,
+    // 这里单独覆盖文件区/表头为白底黑字, 其余控件(按钮/路径栏)保持全局暗色
+    QFileDialog dlg(this, QString::fromUtf8("选择视频"), "/home/orangepi/Videos");
+    dlg.setOption(QFileDialog::DontUseNativeDialog, true);   // 保证样式可覆盖
+    dlg.setFileMode(QFileDialog::ExistingFile);
+    dlg.setNameFilter(QString::fromUtf8("视频文件 (*.mp4 *.avi *.mkv *.mov *.m4v *.mpg)"));
+    dlg.setStyleSheet(QString::fromUtf8(
+        // 文件列表(名称/图标区): 白底黑字
+        "QFileDialog QListView, QFileDialog QTreeView {"
+        "  background-color: #FFFFFF; color: #000000;"
+        "  selection-background-color: #B8D4E8; selection-color: #000000; }"
+        "QFileDialog QListView::item, QFileDialog QTreeView::item { color: #000000; }"
+        // 表头(name/size/type/date modified): 白底黑字
+        "QFileDialog QHeaderView::section {"
+        "  background-color: #FFFFFF; color: #000000; border: 1px solid #CCCCCC;"
+        "  padding: 4px; font-weight: bold; }"
+        // 路径/文件名输入框: 白底黑字(全局已设白底, 补黑字)
+        "QFileDialog QLineEdit, QFileDialog QComboBox {"
+        "  background-color: #FFFFFF; color: #000000; }"
+        // 工具栏按钮/侧边栏: 维持暗色 (全局 QToolButton 已有轮廓, 这里补深色底)
+        "QFileDialog QToolButton { background: #3A3A3A; color: #E0E0E0; border: 1px solid #555555;"
+        "  border-radius: 4px; padding: 3px 8px; }"
+        "QFileDialog QToolButton:hover { background: #4A4A4A; }"
+        // 按钮区: 维持全局暗色
+        "QFileDialog QPushButton { background-color: #3A3A3A; color: #E0E0E0;"
+        "  border: 1px solid #555555; border-radius: 4px; padding: 5px 14px; }"
+        "QFileDialog QPushButton:hover { background-color: #4A4A4A; }"
+    ));
+    if (dlg.exec() == QDialog::Accepted) {
+        QString p = dlg.selectedFiles().value(0);
+        if (!p.isEmpty()) {
+            var["video"] = p;
+            saveSettings();
+            log(QString::fromUtf8("[视频] 已选择: %1").arg(p));
+        }
     }
 }
 
@@ -1261,6 +1458,22 @@ void IndustrialUI::openSettings() {
     zl->addWidget(rb_area);
     v->addWidget(zb);
 
+    // 统计模式: 误检/漏检统计开关 (与 detect_ui 同语义, 真实部署默认"误检+漏检")
+    // radio 只用于展示/选择, 仅 Accept 时读取选中项写回 var["mode"]
+    QGroupBox* mb = new QGroupBox(QString::fromUtf8("统计模式"));
+    QHBoxLayout* ml = new QHBoxLayout(mb);
+    QRadioButton* rb_fp_miss = new QRadioButton(QString::fromUtf8("误检+漏检"));
+    QRadioButton* rb_fp_only = new QRadioButton(QString::fromUtf8("只误检"));
+    QRadioButton* rb_no_fp = new QRadioButton(QString::fromUtf8("只漏检"));
+    rb_fp_miss->setChecked(var["mode"] == "fp+miss");
+    rb_fp_only->setChecked(var["mode"] == "fp-only");
+    rb_no_fp->setChecked(var["mode"] == "no-fp");
+    ml->addWidget(rb_fp_miss);
+    ml->addWidget(rb_fp_only);
+    ml->addWidget(rb_no_fp);
+    ml->addStretch(1);
+    v->addWidget(mb);
+
     // PLC 状态: 正常/错误, Accept 时写 var["plc"] 并同步状态栏指示灯
     QGroupBox* pb = new QGroupBox(QString::fromUtf8("PLC 通信"));
     QHBoxLayout* pl = new QHBoxLayout(pb);
@@ -1303,6 +1516,10 @@ void IndustrialUI::openSettings() {
         if (rb_foot->isChecked()) var["zone"] = "foot";
         else if (rb_area->isChecked()) var["zone"] = "area";
         else var["zone"] = "hybrid";
+        // 统计模式: 读取选中 radio 写回 var["mode"] (cmd() 据此加 --no-fp/--fp-only)
+        if (rb_fp_only->isChecked()) var["mode"] = "fp-only";
+        else if (rb_no_fp->isChecked()) var["mode"] = "no-fp";
+        else var["mode"] = "fp+miss";
         // PLC 状态: 写 var 并同步状态栏指示灯 (含 unpolish/polish 刷新样式)
         var["plc"] = plc_combo->currentData().toString();
         if (var["plc"].isEmpty()) var["plc"] = "error";
@@ -1370,18 +1587,73 @@ void IndustrialUI::openQuery() {
     QTabWidget* tabs = new QTabWidget();
     v->addWidget(tabs);
 
-    // Tab1: 误检帧画廊
+    // Tab1: 数据统计 (围栏/检测/误检/漏检 卡片 + 误检帧画廊)
     QWidget* fp_tab = new QWidget();
     QVBoxLayout* fv = new QVBoxLayout(fp_tab);
+    fv->setSpacing(8);
+
+    // ---- 统计卡片区: 6 张卡片 (QFrame 圆角卡片, 标题 + 大数字) ----
+    QGridLayout* cards = new QGridLayout();
+    cards->setSpacing(10);
+    struct StatCard { QString title; QString key; QLabel* val; };
+    QVector<StatCard> stat_cards;
+    // 卡片布局: 每行 3 张, 共 2 行
+    struct CardDef { const char* title; QString key; bool percent; };
+    CardDef defs[] = {
+        {u8"围栏内人数", "zone_now", false},
+        {u8"检测人数", "persons", false},
+        {u8"跟踪人数", "tracked", false},
+        {u8"误检次数", "fp", false},
+        {u8"漏检次数", "miss", false},
+        {u8"总帧数", "frame", false},
+    };
+    auto makeCard = [&](const QString& title, int row, int col, QString key, bool percent) {
+        QFrame* card = new QFrame(fp_tab);
+        card->setObjectName("statCard");
+        card->setStyleSheet(QString::fromUtf8(
+            "#statCard { background-color: #3A3A3A; border: 1px solid #555555;"
+            "  border-radius: 8px; }"
+            "#statCard QLabel { border: none; background: transparent; }"));
+        QVBoxLayout* cl = new QVBoxLayout(card);
+        cl->setContentsMargins(12, 10, 12, 10);
+        cl->setSpacing(4);
+        QLabel* t = new QLabel(title, card);
+        t->setStyleSheet(QString::fromUtf8("color:#FF9900; font-size:13px;"));
+        QLabel* v = new QLabel(QString::fromUtf8("0"), card);
+        v->setStyleSheet(QString::fromUtf8("color:#FFFFFF; font-size:28px; font-weight:bold;"));
+        v->setAlignment(Qt::AlignCenter);
+        cl->addWidget(t);
+        cl->addWidget(v);
+        cards->addWidget(card, row, col);
+        stat_cards.append({title, key, v});
+    };
+    for (int i = 0; i < 6; ++i)
+        makeCard(QString::fromUtf8(defs[i].title), i / 3, i % 3,
+                 defs[i].key, defs[i].percent);
+    fv->addLayout(cards);
+
+    // ---- 误检帧画廊(下方, 缩略图横条滚动) ----
+    QLabel* fp_title = new QLabel(QString::fromUtf8("误检帧截图"));
+    fp_title->setStyleSheet(QString::fromUtf8("color:#FF9900; font-size:14px; font-weight:bold;"));
+    fv->addWidget(fp_title);
     fp_scroll = new QScrollArea();
     fp_scroll->setWidgetResizable(true);
     fp_container = new QWidget();
+    fp_container->setObjectName("fp_container");
     fp_hbox = new QHBoxLayout(fp_container);
     fp_hbox->setAlignment(Qt::AlignLeft);
     fp_hbox->setSpacing(6);
     fp_scroll->setWidget(fp_container);
+    // 深色背景(与统计卡片一致 #3A3A3A) + 固定高度(缩略图 112px + 边距, 不再占满剩余空间)
+    fp_scroll->setFixedHeight(160);
+    fp_scroll->setStyleSheet(QString::fromUtf8(
+        "QScrollArea { background-color: #3A3A3A; border: 1px solid #555555;"
+        "  border-radius: 8px; }"
+        "QScrollArea > QWidget > QWidget#fp_container { background-color: #3A3A3A; }"));
     fv->addWidget(fp_scroll);
-    tabs->addTab(fp_tab, QString::fromUtf8("误检帧"));
+    // 剩余空间沉底: 卡片+标题+画廊整体顶对齐紧凑排列, 避免中部留白
+    fv->addStretch(1);
+    tabs->addTab(fp_tab, QString::fromUtf8("数据统计"));
     // 打开时先清空再重扫 (画廊内容在 poll 中持续更新)
     while (fp_hbox->count()) {
         QLayoutItem* item = fp_hbox->takeAt(0);
@@ -1390,6 +1662,17 @@ void IndustrialUI::openQuery() {
     }
     fp_shown.clear();
     updateFpGallery();
+
+    // 统计卡片定时刷新: 对话框 exec() 期间主 poll 仍在跑(st 持续更新),
+    // 这里用独立 QTimer 每 500ms 同步一次卡片数值
+    QTimer* stat_timer = new QTimer(&dlg);
+    QObject::connect(stat_timer, &QTimer::timeout, &dlg, [&stat_cards, this]() {
+        for (const StatCard& c : stat_cards) {
+            QString v = st.value(c.key, QString("0"));
+            c.val->setText(v);
+        }
+    });
+    stat_timer->start(500);
 
     // Tab2: 控制台输出 (类成员, 父对象是 main window, 跨次打开保留历史)
     QWidget* log_tab = new QWidget();
@@ -1487,6 +1770,16 @@ void IndustrialUI::loadSettings() {
     var["src"] = s.value("src", QString("run")).toString();
     var["zone"] = s.value("zone", QString("hybrid")).toString();
     var["sudo"] = s.value("sudo", false).toBool() ? "true" : "false";
+    // 恢复上次保存的窗口位置(用户拖到 2.5K 屏后重启不丢)
+    if (s.contains("win_x") && s.contains("win_y")) {
+        int wx = s.value("win_x").toInt(), wy = s.value("win_y").toInt();
+        // 防止恢复到屏幕外/两屏边界: 限制在虚拟屏范围内
+        QRect vg = mainScreenGeom();
+        if (wx >= 0 && wx + width() <= vg.x() + vg.width() + 2560 &&
+            wy >= 0 && wy + height() <= vg.y() + vg.height() + 1440) {
+            move(wx, wy);
+        }
+    }
     lbl_scheme->setText(QString::fromUtf8("方案: ") + var["scheme"]);
     lbl_plc->setText(QString::fromUtf8("● PLC连接: ") +
                      (var["plc"] == "ok" ? QString::fromUtf8("正常") : QString::fromUtf8("错误")));
@@ -1495,8 +1788,6 @@ void IndustrialUI::loadSettings() {
     lbl_plc->style()->polish(lbl_plc);
     // 上次视频为空时自动选 /home/orangepi/Videos 第一个视频 (detect_ui.cpp 同逻辑)
     setDefaultVideo();
-    // 读取围栏多边形叠加到渲染区 (规格 §4.2)
-    loadZone();
     log(QString::fromUtf8("[设置] 已加载: 模型=%1 阈值=%2 视频=%3 围栏=%4")
             .arg(var["model"], var["conf"], var["video"], var["zone_name"]));
 }
@@ -1522,6 +1813,8 @@ void IndustrialUI::saveSettings() {
     s.setValue("src", var["src"]);
     s.setValue("zone", var["zone"]);
     s.setValue("sudo", var["sudo"] == "true");
+    s.setValue("win_x", x());   // 保存窗口位置(最大化/最小化前的位置是用户期望位置)
+    s.setValue("win_y", y());
     s.sync();
 }
 
@@ -1543,6 +1836,13 @@ void IndustrialUI::autoStart() {
 
 // ---------------- main ----------------
 int main(int argc, char** argv) {
+    // 输入法: 必须在 QApplication 构造前设置, Qt 构造时读取 QT_IM_MODULE 决定
+    // 加载哪个输入法插件。板子已装 fcitx(fcitx-frontend-qt5), 但会话环境没导出
+    // 该变量 -> Qt 默认退回无输入法, QLineEdit 只能输入字母打不了中文。
+    // 这里强制指定 fcitx(若外部已显式设置则尊重)。
+    if (qgetenv("QT_IM_MODULE").isEmpty()) {
+        qputenv("QT_IM_MODULE", QByteArrayLiteral("fcitx"));
+    }
     QElapsedTimer start;
     start.start();
     double t_ctor = 0.0, t_show = 0.0;

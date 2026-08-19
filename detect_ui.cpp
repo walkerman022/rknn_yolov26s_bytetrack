@@ -604,8 +604,31 @@ void DetectUI::updateVideo() {
     QFileInfo fi(fp);
     if (!fi.exists()) return;
     qint64 mt = fi.lastModified().toMSecsSinceEpoch();
-    if (mt == frame_mt) return;
+
+
+
+    qint64 sz = fi.size();
+
+
+
+    // èæµååå¥é¢çéä½, åä¸ç§åå¯è½å¤æ¬¡åå¥(ä¿®æ¹æ¶é´ç²åº¦ä¸º 1 ç§), æä»¥å æä»¶å¤§å°ä½ç¬¬äºæ¡ä»¶,
+
+
+
+    // å¦åæ¶é´ç¸åæ¶ GUI è®¤ä¸ºç»é¢æªæ´æ° -> ç»é¢å¡ä½åçªè·³(âç¯çä¹±çªâ)
+
+
+
+    if (mt == frame_mt && sz == frame_sz) return;
+
+
+
     frame_mt = mt;
+
+
+
+    frame_sz = sz;
+
     last_video_t = now;
     QPixmap pm(fp);
     if (!pm.isNull()) {

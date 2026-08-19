@@ -38,21 +38,16 @@ protected:
     void mousePressEvent(QMouseEvent* ev) override;
 };
 
-// 渲染区: 棋盘格背景 + 视频帧(KeepAspectRatio 等比居中) + 围栏多边形叠加
-// (规格 §4.2: 围栏以半透明橙多边形叠加在画面上)
+// 渲染区: 棋盘格背景 + 视频帧(KeepAspectRatio 等比居中)
+// (围栏由 Detect 绘制在视频帧上, 界面不自行叠加避免重影)
 class RenderView : public QWidget {
 public:
     explicit RenderView(QWidget* parent = nullptr) : QWidget(parent) {}
     void setFramePixmap(const QPixmap& pm) { frame = pm; update(); }
-    void setZonePolygon(const QPolygonF& z) { zone = z; hasZone = (z.size() >= 3); update(); }
-    void setVideoSize(int w, int h) { vw = w; vh = h; update(); }
 protected:
     void paintEvent(QPaintEvent* ev) override;
 private:
     QPixmap frame;          // 当前视频帧(原始尺寸, paintEvent 内等比缩放)
-    QPolygonF zone;         // 围栏多边形(视频像素坐标, 取自 models/zone.txt)
-    bool hasZone = false;
-    int vw = 0, vh = 0;     // 视频分辨率(无帧时用于围栏坐标映射)
 };
 
 // 可省略的 QLabel: 宽度不足时用省略号(...)替代被裁剪的文字
@@ -157,13 +152,26 @@ private:
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
     void mouseReleaseEvent(QMouseEvent* ev) override;
+    void moveEvent(QMoveEvent* ev) override;   // 持续记录正常窗口位置(最小化还原用)
+    void changeEvent(QEvent* ev) override;   // 监听激活变化: 最小化(缩小)状态下窗口重新激活时自动还原
     bool nativeEvent(const QByteArray& eventType, void* message, long* result) override;
     QPoint drag_offset;                 // 拖动窗口时的鼠标偏移
+    // 无 WM(X11 转发)环境下的最大化/最小化模拟 + 优先尝试真 showMinimized/showMaximized 让 WM 处理
+    void toggleMaximize();              // 最大化/还原(手动铺满主屏)
+    void doMinimize();                  // 最小化(WM 可用时 showMinimized; 否则缩小到角标)
+    void doRestore();                   // 还原(WM 可用时 showNormal; 否则恢复几何)
+    void startMinimizePoll();           // 缩小角标模式的激活轮询(点任务栏图标自动还原)
+    QRect mainScreenGeom();             // 主屏(锁定 2.5K 屏)可用区; 不再依赖 Qt primaryScreen
+    QScreen* lockedMainScreen();       // 启动时锁定"用户主屏": 优先匹配 2560x1440, 否则最宽屏
+    void diagnoseScreens();             // 启动时打印 Qt 看到的所有 screen 信息(诊断)
+    QScreen* main_screen = nullptr;    // 锁定的 2.5K 主屏指针(避免每次重新扫描)
+    bool win_maximized = false;         // 当前是否"最大化"
+    bool win_minimized = false;         // 当前是否"最小化"
+    QRect normal_geo;                   // 最大化前保存的正常几何
 
     // ---- 工具 ----
     QStringList listVideos() const;
     void setDefaultVideo();
-    void loadZone();
     QString zonePath() const;
     QStringList cmd() const;
     QStringList drawCmd() const;

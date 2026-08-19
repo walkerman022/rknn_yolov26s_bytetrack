@@ -1,12 +1,13 @@
 # 构建产物
 build/
 build_cross/
+build_local/
 
-# 第三方库/编译器(体积大, 不入库)
+# 第三方库/编译依赖体积大, 不入库
 3rdparty/
 debs/
 
-# RKNN 模型文件(单文件 11-21MB, 不入库; 需要时从板子/本地拷贝)
+# RKNN 模型文件(单个 11-21MB, 不入库; 需要时从板子/本地拷贝)
 models/*.rknn
 
 # Python 缓存
@@ -14,18 +15,31 @@ __pycache__/
 *.pyc
 
 # 运行时生成
-detect.log
 stats.txt
 fp_frames/
 frame.jpg
 frame.jpg.tmp.jpg
 detectui.ini
+jeefence.ini
 zone.txt
 
 # 系统文件
 .DS_Store
 Thumbs.db
+.vs/
+*.user
 
 # 备份文件
 *.bak
 *~
+
+# 编译中间产物
+*.obj
+*.exe
+*.ilk
+*.pdb
+*.sln
+*.vcxproj
+*.vcxproj.filters
+CMakeCache.txt
+CMakeFiles/

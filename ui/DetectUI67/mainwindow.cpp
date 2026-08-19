@@ -1,15 +1,18 @@
 #include "mainwindow.h"
-#include "./ui_mainwindow.h"
+#include <QPushButton>
+#include <QDebug>
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
-    , ui(new Ui::MainWindow)
 {
-    ui->setupUi(this);
+    // 在这里添加你的按钮逻辑
+    QPushButton* btn = new QPushButton("点击测试", this);
+    btn->resize(120, 40);
+    btn->move(50, 50);
+
+    connect(btn, &QPushButton::clicked, [=]() {
+        qDebug() << "按钮被点击！";
+        });
 }
 
-MainWindow::~MainWindow()
-{
-    delete ui;
-}
-
+MainWindow::~MainWindow() {}
